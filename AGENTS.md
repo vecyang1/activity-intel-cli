@@ -89,8 +89,10 @@ touching anything that fetches.
    blank rating = unrated, blank `price_usd` = no honest rate, blank
    `cheapest_source` = fewer than two comparable prices. Coverage notes go to
    **stderr**, never into the rows.
-8. **Every documented invocation must run from an arbitrary directory.** Docs
-   lead with `bin/activity-intel`, not a `cd` plus `python3 -m`. See below.
+8. **Every documented invocation must run from an arbitrary directory —
+   including the one the program prints about itself.** Docs lead with
+   `bin/activity-intel`, not a `cd` plus `python3 -m`, and so does every usage
+   and error line argparse emits. Never hardcode `prog`. See below.
 
 ## Adding a source
 
@@ -121,6 +123,25 @@ docs lead with `activity-intel …`, and `tests/test_docs_parity.py` runs the
 launcher from a temp directory, through a symlink, and asserts a detached copy
 refuses with a remedy. Its command extractor grades **both** invocation forms —
 matching only one would let the graded share of the docs shrink silently.
+
+**The usage line is a documented invocation too, and it was the last one
+nobody graded.** `docs/` was swept, the launcher was tested through a symlink
+from a temp directory — and `argparse.ArgumentParser(prog=...)` was pinned to
+the literal `"python3 -m activityintel.cli"`, so every route printed that form
+anyway: the sh launcher, which exists precisely because that form loses its
+`cd`, and the pip console script, which is not a module invocation at all.
+Measured from `/` on 2026-08-28: the program printed its own usage and exited
+0, and the command it named raised `ModuleNotFoundError`. The docs-parity
+extractor could not see it, because it reads Markdown and this string lives in
+Python.
+
+The fix is to state nothing: `prog` comes from `sys.argv[0]`, which is already
+right for the console script and for a real `python3 -m` run, and
+`bin/activity-intel` exports `ACTIVITY_INTEL_PROG` because it hands off through
+`-m` and would otherwise lose the name the caller typed. The guard asserts the
+*property* — the token in the usage line runs from `/` — not a spelling, since
+a different wrong constant would satisfy a string comparison just as well.
+`tools/mutate.py` grades both halves.
 
 Install: `ln -sf "$PWD/bin/activity-intel" ~/.local/bin/activity-intel`
 

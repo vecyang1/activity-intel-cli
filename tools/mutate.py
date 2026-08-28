@@ -15,7 +15,16 @@ Three implementation details are load-bearing; each was a real defect here:
 2. **The verdict is read as `^OK$`, not from a line offset.** `tail -3 | head -1`
    on unittest output lands on "Ran N tests", which is present whether the run
    passed or failed — i.e. it grades nothing.
-3. **Patterns are line-anchored and must match exactly once.** An unanchored
+3. **Restore survives a signal, not just an exception.** `finally:` unwinds on
+   an exception and CPython's default SIGTERM handler does not unwind at all,
+   so a harness killed by a timeout or a `kill` leaves the mutant it was
+   holding in the source tree. Measured 2026-08-28: a 120s tool timeout killed
+   a run mid-mutation and left `transport.py` moving the robots check *after*
+   the cache lookup -- a live policy bypass, in the working tree, announced by
+   nothing but one unrelated-looking red test in the next run. The handlers
+   below turn those signals into an exception so the `finally` still fires.
+
+4. **Patterns are line-anchored and must match exactly once.** An unanchored
    pattern once hit a *docstring* mention of `AVAILABLE = False` instead of the
    assignment, producing a mutant that changed no behaviour and a false CAUGHT.
    A pattern that matches 0 or 2+ times is reported as NOT GRADED, never
@@ -25,6 +34,7 @@ from __future__ import annotations
 
 import pathlib
 import re
+import signal
 import subprocess
 import sys
 
@@ -284,6 +294,21 @@ MUTANTS = [
      "activityintel/sources/klook.py",
      r'(?m)^VERTICAL_BY_TYPE = \{100: "ttd", 102: "hotel", 103: "carrental", 104: "ttd",$',
      'VERTICAL_BY_TYPE = {100: "ttd", 103: "carrental", 104: "ttd",'),
+
+    ("usage is hardcoded back to the module form that fails outside the repo",
+     "activityintel/cli.py",
+     r'(?m)^        prog=os\.environ\.get\("ACTIVITY_INTEL_PROG"\) or None,$',
+     '        prog="python3 -m activityintel.cli",'),
+
+    ("the launcher stops telling argparse the name the caller typed",
+     "bin/activity-intel",
+     r'(?m)^export ACTIVITY_INTEL_PROG$',
+     ': # mutant: override dropped'),
+
+    ("docs-parity grades a documented --help as a command that does not parse",
+     "tests/test_docs_parity.py",
+     r'(?m)^                if \(exc\.code or 0\) != 0:$',
+     '                if True:'),
 ]
 
 
@@ -297,9 +322,37 @@ def run_suite() -> bool:
     return bool(re.search(r"(?m)^OK$", proc.stdout + proc.stderr))
 
 
+def _die_on_signal(signum, _frame):
+    """Turn a kill into an exception so the `finally` restore actually runs."""
+    raise KeyboardInterrupt(f"signal {signum}")
+
+
+def _dirty_targets() -> list[str]:
+    """Mutant target files git says are modified.
+
+    A red baseline has two very different causes and one message used to cover
+    both: your tests are broken, or a previous run died holding a mutant. Only
+    the second one is silently dangerous, so name it with evidence.
+    """
+    rel = sorted({m[1] for m in MUTANTS})
+    proc = subprocess.run(["git", "status", "--porcelain", "--"] + rel,
+                          cwd=ROOT, capture_output=True, text=True)
+    return [ln[3:] for ln in proc.stdout.splitlines() if ln.strip()]
+
+
 def main() -> int:
+    for sig in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(sig, _die_on_signal)
+
     if not run_suite():
         print("BASELINE IS RED — fix that before trusting any verdict below")
+        dirty = _dirty_targets()
+        if dirty:
+            print("  a previous run may have died holding a mutant; these "
+                  "mutant targets are modified:")
+            for d in dirty:
+                print(f"    {d}")
+            print("  check `git diff` on them before assuming the tests broke.")
         return 1
     print("baseline: OK\n")
 

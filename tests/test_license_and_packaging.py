@@ -25,10 +25,14 @@ from __future__ import annotations
 import _sandbox  # noqa: F401  -- MUST be first
 import pathlib
 import re
+import os
 import subprocess
+import sys
 import unittest
+import unittest.mock
 
 import activityintel
+from activityintel import cli
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 LICENSE = ROOT / "LICENSE"
@@ -360,6 +364,85 @@ class TestFilesRunWhicheverWayTheyAreInvoked(unittest.TestCase):
             "defined below `unittest.main()` — invisible to direct "
             "invocation:\n  " + "\n  ".join(offenders))
         print(f"[entry-block] graded {graded} test files")
+
+
+class UsageNamesACommandThatRuns(unittest.TestCase):
+    """The usage line is the one string that tells a stranger how to invoke
+    this, and nothing asserted on it.
+
+    `prog` was pinned to the literal `"python3 -m activityintel.cli"`, so every
+    install route printed that form -- including the sh launcher, which exists
+    *because* that form loses its `cd` in a handoff, and the pip console script,
+    which is not a module invocation at all. Measured from `/` on 2026-08-28:
+    the command printed its own usage happily and the command it named raised
+    `ModuleNotFoundError`. Same defect as a remedy naming a flag the parser
+    rejects; here the remedy named a directory the reader was not standing in.
+
+    So the property, not the spelling: whatever the usage line calls this
+    program has to run from a directory that is not the checkout. Asserting the
+    exact string would pass just as well for a *different* wrong constant.
+    """
+
+    LAUNCHER = ROOT / "bin" / "activity-intel"
+
+    def _usage_prog(self, argv, cwd, env=None):
+        out = subprocess.run(argv + ["--help"], cwd=cwd, env=env,
+                             capture_output=True, text=True, timeout=120)
+        self.assertEqual(out.returncode, 0, out.stderr[-400:])
+        first = out.stdout.splitlines()[0]
+        self.assertTrue(first.startswith("usage: "), first)
+        return first[len("usage: "):].split()[0]
+
+    def test_launcher_usage_names_the_launcher(self):
+        prog = self._usage_prog([str(self.LAUNCHER)], cwd="/")
+        self.assertEqual(prog, "activity-intel",
+                         "the launcher tells the reader to run something else")
+
+    def test_the_name_it_prints_actually_runs_from_outside_the_checkout(self):
+        """`sources` is the offline smoke: no network, no credential."""
+        prog = self._usage_prog([str(self.LAUNCHER)], cwd="/")
+        # Resolve the printed name back to the launcher rather than trusting
+        # $PATH, so the test grades this checkout and not whatever is installed.
+        self.assertEqual(prog, self.LAUNCHER.name)
+        out = subprocess.run([str(self.LAUNCHER), "sources"], cwd="/",
+                             capture_output=True, text=True, timeout=120)
+        self.assertEqual(out.returncode, 0,
+                         f"`{prog} sources` fails from /: {out.stderr[-400:]}")
+
+    def test_the_old_hardcoded_form_really_does_fail_from_slash(self):
+        """The negative control. Without it the two tests above would pass on a
+        machine where the module form happens to resolve, and the defect they
+        describe would read as hypothetical."""
+        out = subprocess.run([sys.executable, "-m", "activityintel.cli", "--help"],
+                             cwd="/", capture_output=True, text=True, timeout=120,
+                             env={k: v for k, v in os.environ.items()
+                                  if k != "PYTHONPATH"})
+        self.assertNotEqual(out.returncode, 0)
+        self.assertIn("No module named", out.stderr)
+
+    def test_prog_is_not_hardcoded_back_to_the_module_form(self):
+        """In-process guard, so a re-hardcode fails fast and cheaply."""
+        env = {k: v for k, v in os.environ.items() if k != "ACTIVITY_INTEL_PROG"}
+        with unittest.mock.patch.dict(os.environ, env, clear=True):
+            prog = cli.build_parser().prog
+        self.assertNotIn("activityintel.cli", prog,
+                         "prog is hardcoded again; let argparse read argv[0]")
+
+    def test_a_renamed_symlink_reports_its_own_name(self):
+        """The launcher hands off through `python3 -m`, so the name the caller
+        typed only survives in the env var. Without this, the override could be
+        dropped from the shim and the two tests above would still pass on the
+        one spelling they happen to check."""
+        env = dict(os.environ, ACTIVITY_INTEL_PROG="renamed-on-purpose")
+        self.assertEqual(self._prog_under(env), "renamed-on-purpose")
+
+    def _prog_under(self, env):
+        out = subprocess.run(
+            [sys.executable, "-c",
+             "from activityintel.cli import build_parser; print(build_parser().prog)"],
+            cwd=str(ROOT), env=env, capture_output=True, text=True, timeout=120)
+        self.assertEqual(out.returncode, 0, out.stderr[-400:])
+        return out.stdout.strip()
 
 
 if __name__ == "__main__":

@@ -36,4 +36,13 @@ if [ ! -d "$root/activityintel" ]; then
 fi
 
 PYTHONPATH="$root${PYTHONPATH:+:$PYTHONPATH}" export PYTHONPATH
+
+# The handoff below is `python3 -m`, so argparse would otherwise report
+# "python3 -m activityintel.cli" in every usage and error line -- the exact
+# form this launcher exists to replace, and one that fails with
+# ModuleNotFoundError from anywhere but the checkout. Tell it the name the
+# caller actually typed (basename, so a renamed symlink still reports itself).
+ACTIVITY_INTEL_PROG=$(basename "$0")
+export ACTIVITY_INTEL_PROG
+
 exec python3 -m activityintel.cli "$@"

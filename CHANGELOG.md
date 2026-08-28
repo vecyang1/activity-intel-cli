@@ -1,5 +1,44 @@
 # Changelog
 
+## v1.4.1 — 2026-08-28
+
+**The command printed its own usage, and the command it named did not exist.**
+
+- **`prog` is no longer hardcoded.** `argparse.ArgumentParser` was pinned to the
+  literal `"python3 -m activityintel.cli"`, so every install route printed that
+  form: the sh launcher — which exists *because* that form loses its `cd` in a
+  handoff — and the pip console script, which is not a module invocation at all.
+  Measured from `/`: the program printed usage and exited 0, and the command in
+  that usage raised `ModuleNotFoundError`. `prog` now comes from `sys.argv[0]`,
+  and `bin/activity-intel` exports `ACTIVITY_INTEL_PROG` because it hands off
+  through `-m`. All three routes now name a command that runs from where it was
+  printed. The guard asserts the property, not the spelling: the token in the
+  usage line is executed from `/`. Two mutants grade it.
+- **The mutation harness survives being killed.** Its restore was a `finally:`,
+  which unwinds on an exception and not on a signal — CPython's default SIGTERM
+  handler does not unwind at all. A 120s tool timeout killed a run mid-mutation
+  and left `transport.py` holding the "cache bypasses the robots gate" mutant in
+  the working tree: a live policy weakening, in the source, announced by nothing
+  but one unrelated-looking red test in the next run. SIGTERM and SIGHUP now
+  raise so the restore runs (verified by killing a run with a mutant confirmed
+  live on disk, and by a negative control that leaks without the handlers). A
+  red baseline also now names the possibility and lists which mutant targets
+  git reports as modified, because "your tests are broken" and "a dead run left
+  a mutant" had the same message and only one of them is dangerous.
+- **The docs-parity gate refused a command that works.** It counted any
+  `SystemExit` from `parse_args` as "does not parse", conflating exit 2 (the
+  defect it exists for) with exit 0 (`--help` answered and exited). Latent
+  until this release, when the first doc named `--help`; a gate that fails a
+  correct command is how a correct gate gets deleted. It now grades the exit
+  code, and its denominator went 13 → **15 commands across 6 files**.
+- **`PROJECT_LINKS.md`** now owns the cross-root map — the two repos this
+  checkout is tracked by, the Cowork output root, the router skill, and the
+  capability card. It had been living in `progress.md`, i.e. as execution
+  history, which is how the rule "commit public changes in both repos" gets
+  inherited as something that happened rather than something that binds. Held
+  back from the public repo alongside `progress.md`.
+- `tools/mutate.py`: 47 → **50 mutants**, all caught.
+
 ## v1.4.0 — 2026-08-28
 
 **40% of the Klook catalogue was hotel rooms, and nothing was broken.**
