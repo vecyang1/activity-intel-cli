@@ -1,0 +1,39 @@
+#!/bin/sh
+# Location-independent entry point for activity-intel-cli.
+#
+# This exists because of a measured failure, not for tidiness. On 2026-08-27 a
+# documented invocation was copied into a chat reply without the `cd` that every
+# doc in this repo carries, and the first person to paste it got:
+#
+#     ModuleNotFoundError: No module named 'activityintel'
+#
+# A command travels as a string. It leaves behind the working directory that
+# made it resolve, and a `cd` prefix is exactly the half that gets dropped. So
+# the shipped form has to work from anywhere, and this script is that form:
+# it resolves its own real path (through any symlink), and puts the package
+# root on PYTHONPATH rather than requiring the caller to stand in it.
+#
+# Install:  ln -sf "$PWD/bin/activity-intel" ~/.local/bin/activity-intel
+# Verify:   zsh -lc 'cd / && activity-intel sources'
+
+# Resolve $0 through symlinks without depending on `readlink -f`, which is
+# absent on older macOS.
+target=$0
+while [ -L "$target" ]; do
+    link=$(readlink "$target")
+    case $link in
+        /*) target=$link ;;
+        *)  target=$(dirname "$target")/$link ;;
+    esac
+done
+root=$(cd "$(dirname "$target")/.." && pwd -P)
+
+if [ ! -d "$root/activityintel" ]; then
+    echo "activity-intel: cannot find the activityintel package next to $root." >&2
+    echo "The launcher was moved away from its repo; re-link it from the checkout:" >&2
+    echo "  ln -sf <repo>/bin/activity-intel ~/.local/bin/activity-intel" >&2
+    exit 78   # EX_CONFIG
+fi
+
+PYTHONPATH="$root${PYTHONPATH:+:$PYTHONPATH}" export PYTHONPATH
+exec python3 -m activityintel.cli "$@"
