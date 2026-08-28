@@ -100,7 +100,9 @@ each query's own cap flag so a capped sub-query is never read as exhaustive.
 """
 from __future__ import annotations
 
+import collections
 import json
+import re
 import urllib.parse
 
 from .. import config, model
@@ -192,6 +194,82 @@ def parse_search(body: str, *, fetched_at: float | None = None) -> dict:
     }
 
 
+# Klook's card vocabulary, e.g. `web_search_ttd_activity_01`. The token in the
+# middle is the vertical; the trailing number is a template version and moves.
+_VERTICAL_RE = re.compile(r"^web_search_([a-z]+)_activity")
+
+# Verticals that are NOT bookable activities. Measured on the live Hanoi union
+# 2026-08-28: 433 of 1,792 cards were `hotel` — rooms at `/hotels/detail/`,
+# priced per night, rated 5.00, ranking above real experiences in a catalogue
+# whose whole subject is experiences. `carrental` links to a search form and is
+# not even a listing.
+NON_ACTIVITY_VERTICALS = frozenset({"hotel", "carrental"})
+
+# Verticals confirmed to be bookable activities. `ttd` is things-to-do (it also
+# carries private airport transfers, which Klook files there and which are a
+# real bookable service); `fnd` is food & dining, whose cards link to ordinary
+# `/activity/` pages.
+ACTIVITY_VERTICALS = frozenset({"ttd", "fnd"})
+
+UNLABELLED = "(unlabelled)"
+
+# Klook states the vertical twice: as a word in `card_name` and as a number in
+# `data.vertical_type`. Measured over every captured Hanoi response, the two
+# agree on every card — 100 and 104 are both `ttd` (104 is a private airport
+# transfer, which Klook files under things-to-do and which is a real bookable
+# service). A code not in this map is *silence*, not disagreement.
+VERTICAL_BY_TYPE = {100: "ttd", 102: "hotel", 103: "carrental", 104: "ttd",
+                    106: "fnd"}
+
+
+def vertical_of(card: dict) -> str | None:
+    """Klook's own word for what kind of product this card is, or None.
+
+    Read from `card_name`, never from `data.category`. The category is a
+    localized display label — "Hotels" in en-US is something else in ja-JP, and
+    a new category name appears every season — while the vertical is structural.
+
+    `data.vertical_type` states the same thing numerically, and is used only to
+    **contradict**, never to decide. When the two disagree the honest answer is
+    neither of them, so this returns a `conflict:` token: `split_verticals`
+    treats it as an unknown vertical, which it keeps and names. Trusting one
+    string from one server completely is the shape of every silent
+    misclassification this module exists to prevent — 441 hotel rooms entered an
+    activity catalogue on exactly that kind of unchecked trust.
+    """
+    m = _VERTICAL_RE.match(((card or {}).get("card_name") or ""))
+    named = m.group(1) if m else None
+    typed = VERTICAL_BY_TYPE.get(((card or {}).get("data") or {}).get("vertical_type"))
+    if named and typed and named != typed:
+        return f"conflict:{named}/{typed}"
+    return named or typed
+
+
+def split_verticals(activities):
+    """-> (kept, Counter(dropped by vertical), [unknown vertical names])
+
+    Three states, deliberately, because two would be wrong in both directions.
+    A vertical Klook adds tomorrow is neither confirmed inventory nor confirmed
+    junk: dropping it loses real listings, and waving it through silently is
+    exactly how 433 hotel rooms entered an activity catalogue unnoticed. So an
+    unrecognised vertical is **kept** — never lose reach on a guess — and its
+    name is returned so the caller can print it instead of implying it was
+    checked.
+    """
+    kept, dropped, unknown = [], collections.Counter(), []
+    for a in activities:
+        v = getattr(a, "vertical", None)
+        if v in NON_ACTIVITY_VERTICALS:
+            dropped[v] += 1
+            continue
+        if v not in ACTIVITY_VERTICALS:
+            name = v or UNLABELLED
+            if name not in unknown:
+                unknown.append(name)
+        kept.append(a)
+    return kept, dropped, unknown
+
+
 def _card_to_activity(card: dict, fetched_at: float | None) -> Activity | None:
     data = (card or {}).get("data") or {}
     vid = data.get("vertical_id")
@@ -240,6 +318,7 @@ def _card_to_activity(card: dict, fetched_at: float | None) -> Activity | None:
     return Activity(
         source=NAME,
         source_id=str(vid),
+        vertical=vertical_of(card),
         title=data.get("title") or "",
         url=data.get("deep_link"),
         category=data.get("category"),

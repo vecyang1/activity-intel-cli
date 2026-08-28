@@ -124,6 +124,32 @@ HANOI = Place(
         "Hanoi museum ticket",
         "Hanoi airport transfer",
         "Hanoi bus ticket",
+        # Added 2026-08-28. Every one is a declared day-trip destination or
+        # product class that the 19-query partition reached only through the
+        # broad "Hanoi" keyword, which caps. Chosen by measuring the in-scope
+        # activity ids each adds to the union (hotels excluded), never guessed.
+        # Twelve rejected candidates returned literally zero new ids: train
+        # street, egg coffee, ao dai, bicycle, Perfume Pagoda, city tour ticket,
+        # eSIM, Duong Lam, beer, cyclo rickshaw, buffet, salon. A keyword that
+        # adds nothing is not free coverage; it is one more request per run
+        # forever.
+        #
+        # **The gain is +18 ids (612 -> 630, +2.9%), not the +10.8% the
+        # selection probe reported.** Both numbers are real and they measure
+        # different things: the probe walked 8 pages per keyword, the shipped
+        # sweep walks config.MAX_SWEEP_PAGES (40). At depth 8 these keywords
+        # look like they add 50 listings, because the existing queries had not
+        # been walked far enough to have found them yet. Comparing two sets
+        # under a parameter the tool does not use is sound as a *ranking* and
+        # worthless as a *forecast* — re-measure a shortlist at the real depth
+        # before writing the number down.
+        "Hanoi cruise overnight",
+        "Hanoi Cat Ba island",
+        "Hanoi Tam Coc Trang An",
+        "Hanoi Tam Dao",
+        "Hanoi Bai Dinh",
+        "Hanoi trekking",
+        "Hanoi Ha Giang loop",
     ),
     match_terms=("hanoi", "ha noi", "hà nội"),
     # Everything Klook/Airbnb sell as a day or overnight trip departing Hanoi.

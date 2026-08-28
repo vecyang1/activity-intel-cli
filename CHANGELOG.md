@@ -1,5 +1,103 @@
 # Changelog
 
+## v1.4.0 — 2026-08-28
+
+**40% of the Klook catalogue was hotel rooms, and nothing was broken.**
+
+- **Verticals.** A full Hanoi sweep returned 1,024 Klook rows; **411 were hotel
+  rooms** — `/hotels/detail/` pages, priced per night, rated 5.00, ranking above
+  real experiences in a catalogue whose entire subject is experiences. No error,
+  no warning, and a headline number 63% above the truth. Klook names the vertical
+  in `card_name` (`web_search_<vertical>_activity_<nn>`); `category` says
+  "Hotels", which to a filter that does not already know the answer is just
+  another display string that changes with the locale. `klook.split_verticals`
+  now classifies into **three** states: known activity (`ttd`, `fnd`), known
+  non-activity (`hotel`, `carrental`), and **unknown — kept and named**.
+  Dropping an unrecognised vertical would lose real listings; waving it through
+  silently is how 441 rooms got in. Coverage reports
+  `dropped_not_activity` by vertical and `unknown_verticals` by name.
+  Hanoi's real Klook activity count is **630**.
+- **The filter runs after the sweep, never inside the parser.** `sweep.sweep`
+  stops paging when a page comes back shorter than the page size — that is how
+  it knows the pool ended. Dropping 22 of 37 rows before it sees them would make
+  a full page look like the last one and truncate the union while still
+  reporting complete. `parse_search` still returns every card.
+- **`--csv`** on `catalog`, `search` and `compare`. Rows to stdout, coverage
+  warnings to stderr, so a pipe stays clean and a human still sees a partial
+  sweep. Every three-state field survives the flattening: a blank `rating` is
+  "nobody has rated this", a blank `price_usd` is "no honest rate for this
+  currency", a blank `cheapest_source` is "only one side had a price". Writing
+  `0` into any of them is what a spreadsheet does to this model for free, so it
+  is mutation-tested. `compare --csv` used to fall through to the human table —
+  the caller asked for CSV, got a formatted table and exit 0.
+- **7 more Klook keywords**, chosen by measuring the in-scope activity ids each
+  adds, not by guessing. 12 rejected candidates added exactly zero. Union
+  612 → 630 (+2.9%) at the shipped page depth. The selection probe reported
+  +10.8% because it walked 8 pages per keyword instead of 40 — sound as a
+  ranking, worthless as a forecast, and the comment in `places.py` says so.
+
+- **One platform can list the same experience several times, and `compare`
+  reported whichever came last.** `{m.source: to_usd(...) for m in members}`
+  lets the last member win. On the live Hanoi compare **9 of 44 groups** had a
+  same-source sibling: one held Airbnb listings at $16/$19/$25 and reported
+  $25; another held $22/$23/$29/$29 and reported $29. An *unpriced* sibling
+  sorting last erased the priced one and deleted the comparison outright.
+  A source is now represented by its **cheapest** priced listing — the question
+  `compare` answers is "where should I book this" — and `members_by_source`
+  reports how many were collapsed, with a `<src>_n` column in the CSV, so a row
+  distilled from five listings does not read as a 1:1 comparison.
+  Effect on the live data: **5 groups changed their price gap and 2 reversed
+  which platform is cheaper.** Found by grading a delivered report's numbers
+  against the delivered files, not by a test.
+
+### Found by two adversarial reviews, after the above
+
+- **`coverage.returned` was computed before the `--match` filter.**
+  `catalog hanoi --match cooking` handed the caller 59 rows and reported
+  630 + 232 = 862 — the field exists to answer "is this pool worth trusting"
+  and was off by 14x. Now derived from what the caller receives, with
+  `matched_out` and a `coverage.match` echo alongside.
+- **Spreadsheet formula injection in `--csv`.** Listing titles are written by
+  third-party sellers and this output exists to be opened in Excel or Sheets, so
+  a title of `=HYPERLINK("http://x")` was a live formula on open (CWE-1236);
+  `QUOTE_MINIMAL` has no concept of a formula. Cells starting with `=`, `+`,
+  `-`, `@`, tab or CR are now prefixed with an apostrophe in **CSV only**, with
+  the count announced on stderr. `--json` stays byte-faithful.
+- **`doctor --csv` parsed, exited 0 and printed JSON** — the same "asked for CSV,
+  got something else" failure `compare --csv` shipped with. Now refused with a
+  usage error.
+- **`fnd` and `carrental` were declared and never exercised.** Both constants
+  had exactly one tested member, so deleting either passed the whole suite. Two
+  more unedited captured responses added; a guard now asserts every declared
+  vertical appears in some fixture and prints how many it graded.
+- **The classifier trusted one string.** `card_name` is now corroborated against
+  the numeric `data.vertical_type`; the two agree on all 83 cards across every
+  fixture, and a disagreement yields a `conflict:` token that lands in
+  `unknown_verticals` — kept and named, never guessed.
+- **Nothing tested that `_emit` routes `--csv`.** Every CSV test called the
+  renderer directly. A mutant that disabled the catalogue's CSV branch entirely
+  escaped, which is how this was found; three wiring tests now cover it.
+- Smaller: the coverage note no longer hardcodes "hotel rooms and car-rental
+  forms" regardless of what was dropped; the CSV's `n_sources` counted listings,
+  not platforms (a two-platform group with five Airbnb listings printed 6);
+  the entry-block guard matches a regex rather than one exact spelling; stdout
+  is forced to UTF-8 so a Vietnamese title cannot truncate a redirected file
+  mid-write on a cp1252 default.
+
+### Two guard defects, both pre-existing
+
+- **5 tests were invisible to `python3 tests/test_sources.py`.** A class sat
+  below `if __name__ == "__main__":`, and `unittest.main()` calls `sys.exit()`.
+  Measured: 33 tests under direct invocation, 38 under `discover`, **OK both
+  times**. New guard grades every test file and prints its count.
+- **The licence-parity denominator moved with local clutter** — 40 files one
+  run, 43 the next, same gate, because a build venv and an `.egg-info` were on
+  disk. Now derived from `git ls-files --cached --others --exclude-standard`,
+  which honours `.gitignore` while still seeing brand-new files, and prints
+  which mode it used.
+
+227 tests on 3.14.7 and 3.12.8; 47/47 mutants caught.
+
 ## v1.3.0 — 2026-08-28
 
 **AGPL-3.0-or-later, and the first release meant to be read by someone who is

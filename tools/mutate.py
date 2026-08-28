@@ -185,6 +185,105 @@ MUTANTS = [
      r"(?m)^  13\. Remote Network Interaction; Use with the GNU General Public License\.$",
      "  13. Use with the GNU Affero General Public License."),
 
+
+    # --- vertical classification (2026-08-28) --------------------------------
+    ("hotel rooms stop being excluded from the activity catalogue",
+     "activityintel/sources/klook.py",
+     r"(?m)^        if v in NON_ACTIVITY_VERTICALS:$",
+     "        if False:"),
+
+    ("a vertical we have never seen is dropped silently instead of named",
+     "activityintel/sources/klook.py",
+     r"(?m)^        if v not in ACTIVITY_VERTICALS:$",
+     "        if False:"),
+
+    ("the classifier stops classifying and every card becomes unlabelled",
+     "activityintel/sources/klook.py",
+     r"(?m)^    return named or typed$",
+     "    return None"),
+
+    ("coverage stops reporting what the vertical filter removed",
+     "activityintel/cli.py",
+     r'(?m)^                "dropped_not_activity": dict\(off_vertical\),$',
+     '                "dropped_not_activity": {},'),
+
+    # Mutates a TEST file on purpose: the subject of this guard is the test
+    # files themselves, so the only honest mutant is a class that a direct
+    # `python3 tests/test_x.py` would never reach.
+    ("a test class hides below the entry block where direct invocation cannot see it",
+     "tests/test_sweep.py",
+     r"(?m)^    unittest\.main\(\)$",
+     "    unittest.main()\n\n\nclass MutantBelowEntryBlock(unittest.TestCase):\n"
+     "    def test_never_reached(self):\n        self.fail('unreachable')"),
+
+    # --- CSV flattening (2026-08-28) -----------------------------------------
+    ("CSV writes a 0 rating for a listing that has never been rated",
+     "activityintel/cli.py",
+     r'(?m)^            out\[col\] = "" if v is None else _csv_safe\(v, neutered\)$',
+     '            out[col] = 0 if v is None else _csv_safe(v, neutered)'),
+
+    ("CSV prints the coverage warning into the data instead of stderr",
+     "activityintel/cli.py",
+     r'(?m)^        print\(f"\[coverage\] \{note or \'this sweep is not complete\'\}", file=sys\.stderr\)$',
+     '        print(f"[coverage] {note or \'this sweep is not complete\'}")'),
+
+    ("CSV columns are taken from whatever the first row happens to have",
+     "activityintel/cli.py",
+     r"(?m)^                            extrasaction=\"ignore\", lineterminator=\"\\n\"\)$",
+     '                            extrasaction="ignore", lineterminator="\\n",\n'
+     '                            restval="0")'),
+
+    # --- one source, several listings (2026-08-28) ---------------------------
+    ("a source is represented by its LAST listing instead of its cheapest",
+     "activityintel/model.py",
+     r"(?m)^        prices = \{src: \(min\(by_source\[src\]\) if by_source\.get\(src\) else None\)$",
+     "        prices = {src: (by_source[src][-1] if by_source.get(src) else None)"),
+
+    ("an unpriced sibling erases a priced one",
+     "activityintel/model.py",
+     r"(?m)^            if usd is not None:$",
+     "            if True:"),
+
+    ("the collapsed member count stops being reported",
+     "activityintel/model.py",
+     r'(?m)^            "members_by_source": counts,$',
+     '            "members_by_source": {},'),
+
+    ("the CSV's n_sources column counts listings instead of platforms",
+     "activityintel/cli.py",
+     r'(?m)^               "n_sources": len\(g\.get\("members_by_source"\) or \{\}\),$',
+     '               "n_sources": g.get("members_count"),'),
+
+    # --- review round 2 (2026-08-28) -----------------------------------------
+    ("coverage.returned reverts to the count from before the --match filter",
+     "activityintel/cli.py",
+     r'(?m)^        entry\["returned"\] = after\.get\(name, 0\)$',
+     '        entry["returned"] = before.get(name, 0)'),
+
+    ("the rows --match removed stop being reported",
+     "activityintel/cli.py",
+     r'(?m)^        entry\["matched_out"\] = before\.get\(name, 0\) - after\.get\(name, 0\)$',
+     '        entry["matched_out"] = 0'),
+
+    ("a spreadsheet formula in a listing title survives into the CSV",
+     "activityintel/cli.py",
+     r'(?m)^    if isinstance\(value, str\) and value\[:1\] in _CSV_TRIGGERS:$',
+     '    if False:'),
+
+    ("doctor accepts --csv again and silently prints JSON",
+     "activityintel/cli.py",
+     r'(?m)^        print\("error: doctor has no --csv output[^\n]*$',
+     '        pass  # mutant: doctor stops refusing'),
+
+    ("card_name is trusted even when vertical_type contradicts it",
+     "activityintel/sources/klook.py",
+     r'(?m)^    if named and typed and named != typed:$',
+     '    if False:'),
+
+    ("the numeric vertical map loses the code that identifies a hotel",
+     "activityintel/sources/klook.py",
+     r'(?m)^VERTICAL_BY_TYPE = \{100: "ttd", 102: "hotel", 103: "carrental", 104: "ttd",$',
+     'VERTICAL_BY_TYPE = {100: "ttd", 103: "carrental", 104: "ttd",'),
 ]
 
 

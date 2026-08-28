@@ -81,6 +81,8 @@ policy *and* that the override still reaches it.
 | Language tags are sparse — only `nature_language_en`, on 19 of 50 Hanoi cards | An empty `languages` means *the payload did not say*, never "English only" |
 | The tag service degrades silently (1 distinct tagKey on one call, 15 on the next, all HTTP 200) | `klook.tag_health` is the canary; a degraded run is flagged in `coverage` |
 | `aggr_condition.filter_list` offers Price range / Others / Location only | There is no server-side language filter to reach for |
+| **The search mixes verticals.** 441 of 1,072 Hanoi rows were hotel rooms; `data.category` said "Hotels" and `deep_link` pointed at `/hotels/detail/`, but the structural signal is `card_name` = `web_search_hotel_activity_01` (and numeric `data.vertical_type` = 102) | An activity catalogue must filter on the vertical, never the localized category label. `klook.split_verticals` keeps `ttd`/`fnd`, drops `hotel`/`carrental` **with counts**, and keeps an unknown vertical while naming it |
+| A `ttd` card can carry `vertical_type` 104 and a `deep_link` to `/airport-transfers/?...` rather than `/activity/` | The URL path is not a reliable discriminator — a private airport transfer is a real bookable service Klook files under things-to-do. Key on the vertical |
 
 ## The distinction this file exists to hold
 
@@ -114,4 +116,12 @@ values from page source, not secrets — but note that the page carrying them
 5. Add a `doctor` check that can actually fail.
 6. If the source reports prices in a fixed currency, add it to
    `config.FX_TO_USD` with an honest `as_of`, or accept `price_usd: null`.
-7. Update this table.
+7. **Establish what verticals the source sells, and which of them are
+   activities.** Every marketplace sells more than one kind of thing, and the
+   one that is not an activity will be priced per night, rated 5.00, and
+   indistinguishable from inventory in the ranking. Find the source's own
+   structural signal for it — not a display label, which is localized and
+   reworded — and give unknown values a third state so a vertical added next
+   year is neither silently included nor silently dropped.
+8. Add its data terms to `NOTICE` in the same change (AGENTS.md rule 9).
+9. Update this table.
