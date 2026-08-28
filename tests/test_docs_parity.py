@@ -86,8 +86,17 @@ class DocumentedCommandsParse(unittest.TestCase):
                 with contextlib.redirect_stderr(io.StringIO()), \
                      contextlib.redirect_stdout(io.StringIO()):
                     parser.parse_args(argv)
-            except SystemExit:
-                failures.append(f"{source}: `{raw}`")
+            except SystemExit as exc:
+                # argparse exits for two opposite reasons and this used to
+                # treat them as one. Code 2 is "I could not parse that" — the
+                # defect this gate exists for. Code 0 is `--help` or
+                # `--version`: parsed fine, answered, exited. Grading a
+                # documented `--help` as a failure is the gate refusing a
+                # command that works, which is how a correct gate teaches
+                # people to delete it. Latent until v1.4.1, when the first doc
+                # named `--help`.
+                if (exc.code or 0) != 0:
+                    failures.append(f"{source}: `{raw}` (exit {exc.code})")
 
         self.assertEqual(failures, [],
                          "documented commands that do not parse:\n  "

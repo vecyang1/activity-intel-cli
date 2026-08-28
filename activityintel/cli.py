@@ -12,6 +12,7 @@ import collections
 import csv
 import dataclasses
 import json
+import os
 import sys
 
 from . import config, exit_codes, model, robots, store, sweep, transport
@@ -836,7 +837,15 @@ def cmd_cache(args) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="python3 -m activityintel.cli",
+        # Never hardcode prog. It was pinned to "python3 -m activityintel.cli"
+        # until v1.4.1, so BOTH install routes printed a usage line naming the
+        # one form bin/activity-intel exists to replace — and that form raises
+        # ModuleNotFoundError from any directory but the checkout (measured
+        # from `/`, 2026-08-28). The help of a working command named a broken
+        # one. argparse derives this from sys.argv[0], which is right for the
+        # console script and for a real `python3 -m` run; the sh launcher
+        # hands off through `-m`, so it exports the name the caller typed.
+        prog=os.environ.get("ACTIVITY_INTEL_PROG") or None,
         description="Search bookable activities/experiences across OTA platforms.")
     sub = p.add_subparsers(dest="cmd", required=True)
 
