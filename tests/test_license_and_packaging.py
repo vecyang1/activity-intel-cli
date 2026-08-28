@@ -25,6 +25,7 @@ from __future__ import annotations
 import _sandbox  # noqa: F401  -- MUST be first
 import pathlib
 import re
+import subprocess
 import unittest
 
 import activityintel
@@ -182,13 +183,26 @@ class NothingShippedPointsIntoTheAuthorsHomeDirectory(unittest.TestCase):
         cost of needing an explicit skip list, which is the right trade —
         a skip is visible in the diff, a missing glob is not.
         """
-        skip_dirs = {".git", "__pycache__", "tests/fixtures", "build", "dist"}
+        # Ask git what could be published rather than what happens to be on
+        # disk. Measured 2026-08-28: leaving a build venv and an .egg-info in
+        # the tree moved this denominator from 40 to 43 between two runs of the
+        # same gate — a count that changes with local clutter cannot be read as
+        # evidence about what ships. `--others --exclude-standard` still honours
+        # .gitignore, so a brand-new file (where a fresh leak actually lives) is
+        # in scope while build artefacts are not.
+        tracked = self._git_publishable()
+        skip_dirs = {".git", "__pycache__", "tests/fixtures", "build", "dist",
+                     ".venv", "venv"}
         keep_suffix = {".md", ".toml", ".py", ".cfg", ".txt", ".yml", ".yaml"}
         out: list[pathlib.Path] = []
         for p in sorted(ROOT.rglob("*")):
             if not p.is_file():
                 continue
             rel = p.relative_to(ROOT)
+            if tracked is not None and rel.as_posix() not in tracked:
+                continue
+            if rel.suffix == ".egg-info" or ".egg-info" in rel.parts[0]:
+                continue
             if any(part in skip_dirs for part in rel.parts):
                 continue
             if str(rel.parent).startswith("tests/fixtures"):
@@ -207,6 +221,25 @@ class NothingShippedPointsIntoTheAuthorsHomeDirectory(unittest.TestCase):
                 continue
             out.append(p)
         return out
+
+    @staticmethod
+    def _git_publishable() -> set[str] | None:
+        """Paths git would let out of here, or None when git cannot answer.
+
+        None means "fall back to walking the tree" — an sdist extraction has no
+        .git. The mode is printed with the denominator so a reader can tell a
+        narrowed selector from a small repository.
+        """
+        try:
+            out = subprocess.run(
+                ["git", "-C", str(ROOT), "ls-files", "--cached", "--others",
+                 "--exclude-standard"],
+                capture_output=True, text=True, timeout=20)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        if out.returncode != 0:
+            return None
+        return {line for line in out.stdout.splitlines() if line}
 
     def test_no_shipped_file_hardcodes_a_home_directory(self):
         subjects = self._subjects()
@@ -233,9 +266,11 @@ class NothingShippedPointsIntoTheAuthorsHomeDirectory(unittest.TestCase):
             offenders, [],
             "absolute home paths in shipped files — correct on exactly one "
             "machine:\n  " + "\n  ".join(offenders))
+        mode = ("git-publishable" if self._git_publishable() is not None
+                else "tree-walk (no git here)")
         print(f"[licence-parity] graded {len(subjects)} shipped files for "
-              f"machine-specific paths ({placeholders} placeholder paths "
-              f"allowed)")
+              f"machine-specific paths via {mode} ({placeholders} placeholder "
+              f"paths allowed)")
 
     def test_the_detector_actually_fires(self):
         """A gate nobody has seen red is not evidence."""
@@ -287,6 +322,44 @@ class NothingShippedPointsIntoTheAuthorsHomeDirectory(unittest.TestCase):
 
     def test_sandbox_still_owns_the_store(self):
         _sandbox.assert_real_store_untouched()
+
+
+class TestFilesRunWhicheverWayTheyAreInvoked(unittest.TestCase):
+    """`unittest.main()` calls `sys.exit()`, so anything defined below it never
+    runs under direct invocation.
+
+    `unittest discover` imports the module instead, so `__name__` is not
+    `"__main__"`, the entry block does not fire, and every class is collected.
+    That is the trap: the documented command finds them and
+    `python3 tests/test_x.py` silently finds fewer, and the two numbers are
+    never compared. Measured 2026-08-28 in this repo — three classes appended
+    below the entry block of `test_policy_and_compare.py`, 184 tests under
+    discover and 181 under direct invocation, suite green both times. Appending
+    is what puts them there, and appending is what a tool does by default.
+    """
+
+    # A regex, not one exact spelling: single quotes or different spacing would
+    # silently escape grading, and this guard's whole value is its denominator.
+    ENTRY = re.compile(r"(?m)^if\s+__name__\s*==\s*['\"]__main__['\"]\s*:")
+
+    def test_nothing_is_defined_below_the_entry_block(self):
+        graded, offenders = 0, []
+        for path in sorted((ROOT / "tests").glob("test_*.py")):
+            text = path.read_text(encoding="utf-8")
+            m = self.ENTRY.search(text)
+            if m is None:
+                continue
+            graded += 1
+            tail = text[m.end():]
+            for i, line in enumerate(tail.splitlines()):
+                if line.startswith(("def ", "class ", "@")):
+                    offenders.append(f"{path.name}: {line.strip()[:60]}")
+        self.assertGreaterEqual(graded, 4, "selector found almost no test files")
+        self.assertEqual(
+            offenders, [],
+            "defined below `unittest.main()` — invisible to direct "
+            "invocation:\n  " + "\n  ".join(offenders))
+        print(f"[entry-block] graded {graded} test files")
 
 
 if __name__ == "__main__":

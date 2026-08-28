@@ -276,6 +276,9 @@ def _node_to_activity(node: dict, fetched_at: float | None) -> Activity | None:
 
     return Activity(
         source=NAME,
+        # Airbnb Experiences sells exactly one vertical. Stating it beats
+        # leaving it None, which means "the source did not say".
+        vertical="experience",
         source_id=str(eid),
         title=_text(descriptions.get("name")) or "",
         url=f"https://www.airbnb.com/experiences/{eid}",

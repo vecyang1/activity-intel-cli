@@ -47,6 +47,22 @@ touching anything that fetches.
 4. **No credentials in this repo.** The enabled sources need none. Viator reads
    `VIATOR_API_KEY` from the environment through its own resolver and never from
    a file here. Never add a key to a fixture.
+4b. **Not everything a source sells is an activity, and only the source's own
+   vertical says which.** Klook answers a things-to-do query with hotel rooms
+   (441 of them in one Hanoi sweep), rated 5.00 and priced per night. Read
+   `card_name`, never `data.category` — the category is a localized display
+   label, the vertical is structural. `klook.split_verticals` has **three**
+   outcomes and all three are load-bearing: known activity kept, known
+   non-activity dropped **with its count reported**, unknown vertical **kept
+   and named**. Do not turn the third into either of the other two: dropping it
+   loses real listings, and waving it through silently is precisely how the
+   hotels arrived unnoticed.
+
+   Run it **after** the sweep, never inside `parse_search`. `sweep.sweep` stops
+   paging on a page shorter than the page size; a parser that filters makes a
+   full page look like the last page and truncates the union while still
+   reporting complete. Verticals are also filtered **before** the geographic
+   scope, so `dropped_out_of_scope` keeps meaning "a real activity, wrong city".
 5. **Never let a short answer look like a complete one.** Capped, truncated, or
    partially-failed sweeps set `coverage.complete = false` and exit `7`.
 6. **Absent is not zero.** `rating: null` + `rating_state` — never a `0.0`
@@ -57,6 +73,22 @@ touching anything that fetches.
    hard-pinned to HKD (every currency param, header and cookie is ignored), so
    comparison needs a *separate derived* `price_usd` column. Rates live in
    `config.FX_TO_USD` with an `as_of` date and a staleness warning.
+6b. **`returned` means "what the caller got", after every filter.** It was
+   computed before the client-side `--match` filter, so a 59-row answer
+   reported 862. Report the removed rows separately as `matched_out`: "this
+   source is thin" and "my keyword was narrow" have opposite remedies, and a
+   reader cannot tell them apart from one number.
+7a. **A source is a SET of listings in a match group, never one.** Keying a
+   dict on `m.source` lets the last member win, and 9 of 44 live Hanoi groups
+   had a same-source sibling. Reduce with `min` over the *priced* members —
+   `compare` answers "where should I book this" — and report
+   `members_by_source` so a row distilled from five listings cannot read as a
+   1:1 comparison. An unpriced sibling must never erase a priced one.
+7b. **A three-state field stays three-state on the way out.** `--csv` is where
+   `rating: null` becomes a `0` a reader sorts on. Blank cells are the contract:
+   blank rating = unrated, blank `price_usd` = no honest rate, blank
+   `cheapest_source` = fewer than two comparable prices. Coverage notes go to
+   **stderr**, never into the rows.
 8. **Every documented invocation must run from an arbitrary directory.** Docs
    lead with `bin/activity-intel`, not a `cd` plus `python3 -m`. See below.
 
@@ -104,6 +136,12 @@ python3 tools/mutate.py                    # every guard confirmed able to go re
 zsh -lc 'cd / && activity-intel doctor'                  # from where a user stands
 zsh -lc 'cd / && activity-intel doctor --ignore-robots'  # exercises Klook too
 ```
+
+Nothing may be defined **below** `if __name__ == "__main__":` in a test file.
+`unittest.main()` calls `sys.exit()`, so `discover` sees those classes and
+`python3 tests/test_x.py` does not — measured here as 38 vs 33 tests, OK both
+times. Appending is what puts them there, and appending is what a tool does by
+default. `TestFilesRunWhicheverWayTheyAreInvoked` grades every test file.
 
 `tests/_sandbox.py` must be the **first import** in every test module — it
 points `ACTIVITY_INTEL_HOME` at a disposable directory and asserts afterwards

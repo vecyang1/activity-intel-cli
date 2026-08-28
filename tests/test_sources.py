@@ -10,6 +10,8 @@ have shipped behind a green suite.
 from __future__ import annotations
 
 import _sandbox  # noqa: F401  -- MUST be first
+import collections
+import dataclasses
 import json
 import pathlib
 import unittest
@@ -91,6 +93,75 @@ class KlookParsing(unittest.TestCase):
                             tags=("English guided", "3-5 hrs", "Free cancellation"))
                    for i in range(10)]
         self.assertFalse(klook.tag_health(healthy)["suspect_degraded"])
+
+
+class KlookVerticals(unittest.TestCase):
+    """Klook answers a *things-to-do* query with hotel rooms, and says so only
+    in ``card_name``.
+
+    Measured 2026-08-28 on the live Hanoi union: 433 of 1,792 cards were
+    ``web_search_hotel_activity_01`` — rooms priced per night, linking to
+    ``/hotels/detail/``, carrying 5.00 ratings that outranked real experiences
+    in a catalogue whose entire subject is experiences. Nothing in the payload
+    flags them as a different kind of product; ``category`` says "Hotels", which
+    is indistinguishable from any other category string to a filter that does
+    not already know the answer.
+    """
+
+    def setUp(self):
+        self.parsed = klook.parse_search(fixture("klook_search_mixed_verticals.json"),
+                                         fetched_at=0.0)
+
+    def test_a_hotel_card_is_classified_as_a_hotel_not_an_activity(self):
+        got = collections.Counter(a.vertical for a in self.parsed["activities"])
+        self.assertEqual(got, collections.Counter({"ttd": 15, "hotel": 22}))
+
+    def test_parse_returns_every_card_so_paging_stays_honest(self):
+        """Filtering inside the parser would silently truncate the sweep.
+
+        ``sweep.sweep`` stops paging when a page comes back shorter than the
+        page size — that is how it knows the pool ended. Dropping 22 of 37 rows
+        before it sees them makes a full page look like the last page, and the
+        union loses everything past it while still reporting complete.
+        """
+        self.assertEqual(len(self.parsed["activities"]), 37)
+        self.assertEqual(self.parsed["total"], 37)
+
+    def test_the_catalogue_keeps_activities_and_drops_rooms_by_count(self):
+        kept, dropped, unknown = klook.split_verticals(self.parsed["activities"])
+        self.assertEqual(len(kept), 15)
+        self.assertEqual(dict(dropped), {"hotel": 22})
+        self.assertEqual(unknown, [])
+        self.assertTrue(all(a.vertical == "ttd" for a in kept))
+
+    def test_an_unknown_vertical_is_kept_and_named_rather_than_silently_judged(self):
+        """A vertical Klook adds tomorrow is neither confirmed junk nor confirmed
+        inventory. Dropping it loses real listings; including it quietly is how
+        the hotels got in. So: keep it, and say the name out loud."""
+        rows = list(self.parsed["activities"][:2])
+        rows.append(dataclasses.replace(rows[0], source_id="new-1",
+                                        vertical="hydrofoil"))
+        kept, dropped, unknown = klook.split_verticals(rows)
+        self.assertIn("hydrofoil", unknown)
+        self.assertEqual(dropped, collections.Counter())
+        self.assertEqual(len(kept), 3)
+
+    def test_a_card_with_no_vertical_at_all_is_unknown_not_an_activity_claim(self):
+        row = dataclasses.replace(self.parsed["activities"][0], vertical=None)
+        kept, dropped, unknown = klook.split_verticals([row])
+        self.assertEqual(len(kept), 1)
+        self.assertEqual(dropped, collections.Counter())
+        self.assertEqual(unknown, ["(unlabelled)"])
+
+    def test_the_vertical_is_read_from_klooks_own_word_not_the_category_label(self):
+        """``category`` is a display string in the user's locale; ``card_name``
+        is the vertical. Keying on the label would break on the first
+        translation and on every new category name."""
+        self.assertEqual(klook.vertical_of({"card_name": "web_search_hotel_activity_01"}),
+                         "hotel")
+        self.assertEqual(klook.vertical_of({"card_name": "web_search_ttd_activity_07"}),
+                         "ttd")
+        self.assertIsNone(klook.vertical_of({"data": {"category": "Hotels"}}))
 
 
 class AirbnbParsing(unittest.TestCase):
@@ -212,10 +283,6 @@ class Scoring(unittest.TestCase):
         _sandbox.assert_real_store_untouched()
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class AirbnbLanguageFilter(unittest.TestCase):
     """The one field that answers 'can I take this class in Chinese?'.
 
@@ -249,3 +316,94 @@ class AirbnbLanguageFilter(unittest.TestCase):
         a = airbnb.search_url("p", "q", language="zh")
         b = airbnb.search_url("p", "q", language="ko")
         self.assertNotEqual(a, b)
+
+
+class KlookMinorVerticals(unittest.TestCase):
+    """`fnd` and `carrental` were in the constants and in no fixture.
+
+    Both sets had exactly one member under test — `ttd` and `hotel` — so
+    deleting `"fnd"` from ACTIVITY_VERTICALS or `"carrental"` from
+    NON_ACTIVITY_VERTICALS passed every test and every mutant. A constant with
+    an unexercised member is a claim nobody has checked.
+    """
+
+    def test_food_and_dining_is_an_activity(self):
+        parsed = klook.parse_search(fixture("klook_search_minor_verticals.json"))
+        got = collections.Counter(a.vertical for a in parsed["activities"])
+        self.assertEqual(got["fnd"], 1)
+        kept, dropped, unknown = klook.split_verticals(parsed["activities"])
+        self.assertIn("fnd", {a.vertical for a in kept})
+        self.assertNotIn("fnd", dropped)
+        self.assertEqual(unknown, [])
+
+    def test_a_car_rental_search_form_is_not(self):
+        parsed = klook.parse_search(fixture("klook_search_carrental.json"))
+        got = collections.Counter(a.vertical for a in parsed["activities"])
+        self.assertEqual(got["carrental"], 1)
+        kept, dropped, unknown = klook.split_verticals(parsed["activities"])
+        self.assertEqual(dropped["carrental"], 1)
+        self.assertNotIn("carrental", {a.vertical for a in kept})
+
+    def test_every_named_vertical_is_exercised_by_a_real_fixture(self):
+        """The guard for the gap itself: a constant gains a member, and this
+        fails until a captured response containing it is added."""
+        seen = set()
+        for name in ("klook_search_mixed_verticals.json",
+                     "klook_search_minor_verticals.json",
+                     "klook_search_carrental.json",
+                     "klook_search_hanoi_cooking.json"):
+            seen |= {a.vertical
+                     for a in klook.parse_search(fixture(name))["activities"]}
+        declared = klook.ACTIVITY_VERTICALS | klook.NON_ACTIVITY_VERTICALS
+        self.assertEqual(declared - seen, set(),
+                         "declared verticals with no fixture to prove them")
+        print(f"[klook-verticals] {len(declared)} declared, all seen in fixtures")
+
+
+class KlookVerticalCorroboration(unittest.TestCase):
+    """`card_name` is one string from one server. Klook also states the vertical
+    numerically in `data.vertical_type`, and the two agreed on every card
+    measured (100/104 -> ttd, 102 -> hotel, 103 -> carrental, 106 -> fnd).
+
+    Trusting one field completely is the shape of every silent misclassification
+    in this file's history, so when the two disagree the answer is neither of
+    them: the row becomes an unknown vertical, which this module already keeps
+    and names rather than judging.
+    """
+
+    def test_the_two_fields_agree_on_every_card_in_every_fixture(self):
+        graded = 0
+        for name in ("klook_search_mixed_verticals.json",
+                     "klook_search_minor_verticals.json",
+                     "klook_search_carrental.json",
+                     "klook_search_hanoi_cooking.json"):
+            payload = json.loads(fixture(name))
+            for card in payload["result"]["search_result"]["cards"]:
+                vt = (card.get("data") or {}).get("vertical_type")
+                if klook.VERTICAL_BY_TYPE.get(vt) is None:
+                    continue
+                graded += 1
+                self.assertEqual(klook.vertical_of(card),
+                                 klook.VERTICAL_BY_TYPE[vt],
+                                 f"card_name and vertical_type disagree in {name}")
+        self.assertGreater(graded, 50)
+        print(f"[klook-verticals] card_name agreed with vertical_type on {graded} cards")
+
+    def test_a_disagreement_becomes_unknown_rather_than_a_guess(self):
+        card = {"card_name": "web_search_ttd_activity_01",
+                "data": {"vertical_type": 102}}   # says ttd, types as a hotel
+        v = klook.vertical_of(card)
+        self.assertNotIn(v, klook.ACTIVITY_VERTICALS)
+        self.assertNotIn(v, klook.NON_ACTIVITY_VERTICALS)
+        self.assertIn("ttd", v)
+        self.assertIn("hotel", v)
+
+    def test_an_unrecognised_type_code_does_not_override_the_card_name(self):
+        """A new numeric code is not evidence against the name; it is silence."""
+        card = {"card_name": "web_search_hotel_activity_01",
+                "data": {"vertical_type": 999}}
+        self.assertEqual(klook.vertical_of(card), "hotel")
+
+
+if __name__ == "__main__":
+    unittest.main()

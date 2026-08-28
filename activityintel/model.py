@@ -133,6 +133,12 @@ class Activity:
     url: str | None = None
 
     category: str | None = None
+    # What KIND of bookable thing this is, in the source's own vocabulary.
+    # Distinct from `category`, which is a localized display label: Klook
+    # answers a things-to-do query with hotel rooms and marks the difference
+    # only here. None means the source did not say — which is not the same as
+    # "an activity", and callers must keep the two apart.
+    vertical: str | None = None
     city: str | None = None
     neighborhood: str | None = None
 
@@ -449,13 +455,33 @@ def find_cross_source_matches(activities, *, threshold: float = DEFAULT_MATCH_TH
         for m in members[1:]:
             shared_all &= tokens[m.key]
 
-        prices = {m.source: to_usd(m.price_amount, m.price_currency) for m in members}
+        # One platform can list the same experience several times, so a source
+        # is a *set* of prices, not one. The obvious dict comprehension keyed on
+        # `m.source` lets the LAST member win — measured on the live Hanoi
+        # compare 2026-08-28, 9 of 44 groups had a same-source sibling and every
+        # one reported an arbitrary pick: $16/$19/$25 reported as $25,
+        # $22/$23/$29/$29 reported as $29. Worse, an *unpriced* sibling sorting
+        # last erased the priced one and deleted the comparison outright.
+        #
+        # The reduction is `min` because the question this answers is "where
+        # should I book this", and it is reported in `members_by_source` so a
+        # reader can see that a 5-member group renders as two numbers.
+        by_source: dict[str, list[float]] = {}
+        counts: dict[str, int] = {}
+        for m in members:
+            counts[m.source] = counts.get(m.source, 0) + 1
+            usd = to_usd(m.price_amount, m.price_currency)
+            if usd is not None:
+                by_source.setdefault(m.source, []).append(usd)
+        prices = {src: (min(by_source[src]) if by_source.get(src) else None)
+                  for src in counts}
         known = [p for p in prices.values() if p is not None]
         groups.append({
             "shared_terms": sorted(shared_all),
             # The weakest link, not a flattering representative pair.
             "similarity": round(min(pair_sims), 3) if pair_sims else 0.0,
             "members_count": len(members),
+            "members_by_source": counts,
             "price_usd_by_source": prices,
             # Both fields need TWO comparable prices, not one. With a single
             # known price the spread is undefined and "cheapest" is a claim

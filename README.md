@@ -40,7 +40,28 @@ activity-intel catalog hanoi --language zh          # Chinese-guided only (Airbn
 activity-intel search "cooking class" hanoi
 activity-intel compare hanoi --ignore-robots        # same class, both platforms, price gap
 activity-intel cache                                # stats; --purge to clear
+
+activity-intel catalog hanoi --ignore-robots --csv   # flat CSV for a spreadsheet
+activity-intel compare hanoi --ignore-robots --csv   # both platforms side by side
 ```
+
+`--csv` writes rows to stdout and coverage warnings to **stderr**, so a pipe
+stays clean while a human still sees that the sweep was partial. Empty cells are
+real absences: a blank `rating` is a listing nobody has rated, a blank
+`price_usd` is a currency with no honest rate, a blank `cheapest_source` means
+only one side had a price. Reading a blank as `0` sorts every new listing below
+every one-star one, which is the bug the JSON three-state model exists to
+prevent and the one a spreadsheet re-introduces for free.
+
+A cell that would start with `=`, `+`, `-`, `@`, a tab or a CR is prefixed with
+an apostrophe so a spreadsheet opens it as text — listing titles are written by
+third-party sellers and `--csv` exists to be double-clicked. The count is
+announced on stderr; **`--json` is untouched** and remains the lossless channel.
+
+`coverage.sources[*].returned` counts what the caller actually received, after
+`--match`; the rows that filter removed are `matched_out`. Those are different
+facts with opposite remedies — "this platform is thin" versus "my keyword was
+narrow" — and reporting one as the other made a 59-row answer claim 862.
 
 Everything works from any directory. That is deliberate: on 2026-08-27 a
 documented command was quoted without its `cd` prefix and produced
@@ -51,13 +72,18 @@ from a temp directory to keep that true.
 
 ## What it returns
 
-Hanoi, verified 2026-08-27:
+Hanoi, verified 2026-08-28:
 
 | | listings | notes |
 |---|---|---|
-| Airbnb Experiences | 231 | 19-category union; server-side language filter |
-| Klook | 1,025 | needs `--ignore-robots`; 798 in-city + 227 day trips |
-| **combined** | **1,256** | 1,016 rated, 240 new, 1,255 with USD prices |
+| Airbnb Experiences | 232 | 19-category union; server-side language filter |
+| Klook | 630 | needs `--ignore-robots`; 391 in-city + 239 day trips |
+| **combined** | **862** | 668 rated, 194 new, 861 with USD prices |
+
+**That Klook number used to read 1,025, and 411 of those were hotel rooms.**
+Klook answers a things-to-do query with whatever it sells — rooms at
+`/hotels/detail/`, priced per night, rated 5.00, outranking real experiences —
+and marks the difference only in its card type. See *Verticals* below.
 
 ```
  SCORE  RATING  REVIEWS             PRICE       DUR  SOURCE   TITLE
@@ -96,12 +122,25 @@ Hanoi's 222, and the category sweep recovers the rest. Klook's `total` caps at
 exactly 1000 for any broad query, so a broad Hanoi sweep is always a sample and
 says so.
 
+**Not everything a source sells is an activity.** Klook's search mixes
+verticals and names them only in `card_name`: `ttd` (things to do) and `fnd`
+(food & dining) are activities, `hotel` and `carrental` are not. A Hanoi sweep
+drops 441 rooms and 1 rental form, and `coverage.dropped_not_activity` reports
+both counts by vertical — a smaller number with no explanation is
+indistinguishable from a small market. A vertical this build has never seen is
+**kept, not judged**, and named in `coverage.unknown_verticals`: dropping it
+would lose real listings, and waving it through silently is exactly how 441
+hotel rooms got into an activity catalogue unnoticed.
+
 **Cross-platform matches are reported, never merged.** `compare` finds the same
 experience on two platforms and prices the gap — "Ninh Binh Day Tour from Ha
 Noi" was $33.46 on Klook (4.80★, 2,862 reviews) and $161 on Airbnb (5.00★, 1
 review). Merging them would collapse the two fields that make the finding
 useful, and a false merge would silently delete a real listing, so the tool
-groups and leaves the judgement to you.
+groups and leaves the judgement to you. When one platform lists the same
+experience several times — 9 of 44 Hanoi groups do — the row shows that
+platform's **cheapest** priced listing and `members_by_source` (CSV: `<src>_n`)
+says how many were collapsed.
 
 ## Sources and the robots override
 
@@ -174,9 +213,9 @@ docs/SOURCES.md  what we may read and what we may not — read before adding a s
 ```bash
 # Both interpreters: the compliance verdict used to differ between them.
 for py in /opt/homebrew/bin/python3 /usr/local/bin/python3; do
-  PYTHONDONTWRITEBYTECODE=1 $py -B -m unittest discover -s tests -t tests   # 175 tests
+  PYTHONDONTWRITEBYTECODE=1 $py -B -m unittest discover -s tests -t tests   # 227 tests
 done
-python3 tools/mutate.py                   # 29/29 guards confirmed able to go red
+python3 tools/mutate.py                   # 47/47 guards confirmed able to go red
 activity-intel doctor                     # live contract, default policy
 activity-intel doctor --ignore-robots     # also exercises the Klook endpoint
 ```
@@ -186,7 +225,7 @@ test module, and it asserts the real database is untouched afterwards. The
 fixtures are unedited captured responses; a hand-written one hid a real bug once
 (`review_count` lives on `card.track_info`, not `card.data`).
 
-`tools/mutate.py` confirms all 29 guards turn the suite red — including reading
+`tools/mutate.py` confirms all 47 guards turn the suite red — including reading
 the cache before the robots gate, falling back to the version-dependent stdlib
 path matcher, widening the per-host override to a global switch, letting a
 stated zero become a `0.0` rating, and naming a cheapest platform when only one
