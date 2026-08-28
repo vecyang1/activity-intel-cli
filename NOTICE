@@ -1,0 +1,72 @@
+activity-intel-cli
+Copyright (C) 2026 Vec Yang
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU Affero General Public License as published by the Free
+Software Foundation, either version 3 of the License, or (at your option) any
+later version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE.  See the GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License along
+with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+AGPL-3.0-or-later from the first public release. Earlier commits exist only in
+a private backup repository and carried no licence grant at all, so there is no
+permissive release of this code to fall back to.
+
+
+THIRD-PARTY DATA
+----------------
+
+This tool reads public endpoints at runtime. The terms of each source stay with
+that source and are not granted by the licence above. The AGPL covers the code
+in this repository; it says nothing about who may use the listings, prices, or
+photographs the code fetches.
+
+  klook.com    Listing data is Klook's. This project redistributes no Klook
+               dataset and ships no harvested catalogue.
+               Klook's robots.txt disallows its search endpoint
+               (`Disallow: */search/*`). Klook is therefore **off by default**
+               and reaching it requires `--ignore-robots`, an explicit
+               per-invocation decision by the operator, announced on stderr and
+               named in `coverage.robots_override_hosts`. robots.txt is a
+               voluntary crawl directive and overriding it for low-volume
+               personal research is a call an operator may make for their own
+               traffic. It is not a call this project makes on your behalf,
+               which is why the flag exists and why it is not the default.
+               The override stops at bot protection. Klook's activity detail
+               pages return HTTP 403 (Akamai); the flag does not touch them and
+               no code here attempts to. If you need Klook data at any volume,
+               or for anything commercial, use Klook's partner API — that route
+               needs no override at all.
+
+  airbnb.com   Listing data is Airbnb's and its hosts'. Read only through the
+               robots-*allowed* `/api/v3/` path with a public frontend key.
+               Airbnb's `Disallow: /s/*/*` is enforced even while
+               `--ignore-robots` is set for Klook, because the override is
+               per-host. This project redistributes no Airbnb dataset.
+
+  viator.com   Reached through Viator's sanctioned Partner API, which requires
+               a key the operator creates themselves (`VIATOR_API_KEY`, read
+               from the environment, never stored here). Viator's partner
+               agreement governs that data.
+
+TEST FIXTURES
+-------------
+
+`tests/fixtures/` contains four unedited captured responses (~800 KB) from
+Klook and Airbnb, retained so the parsers are tested against what the servers
+actually send rather than against a hand-written idea of it — a hand-written
+fixture hid a real bug here once. They are commercial listing records: titles,
+prices, ratings, review counts and `a0.muscache.com` listing-photo URLs. They
+contain no host names, user identifiers, avatars, contact details, or other
+personal data, and they are samples for testing, not a dataset for use. They
+are not a licence to the underlying content, and the copyright in that content
+remains with Klook, Airbnb, and the hosts.
+
+Do not commit this tool's *output* to a public repository. Ranking and
+comparing a few hundred listings for a trip you are planning is what this is
+for; republishing someone else's catalogue is not.
