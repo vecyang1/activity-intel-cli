@@ -21,7 +21,7 @@ import pathlib
 import unittest
 from contextlib import redirect_stderr
 
-from activityintel import cli, config, exit_codes, model, places, robots
+from activityintel import cli, config, exit_codes, model, places, render, robots
 from activityintel.model import RATED, Activity
 from activityintel.sources import airbnb, klook, viator
 
@@ -551,7 +551,7 @@ class CsvOutputKeepsTheThreeStates(unittest.TestCase):
     def _csv(self):
         buf, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(buf), redirect_stderr(err):
-            cli._render_csv(self._payload())
+            render._render_csv(self._payload())
         return list(csv.DictReader(io.StringIO(buf.getvalue()))), err.getvalue()
 
     def test_one_row_per_activity_plus_a_header(self):
@@ -645,7 +645,7 @@ class CompareCsvIsTheArtifactPeopleActuallyWant(unittest.TestCase):
     def _csv(self):
         buf, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(buf), redirect_stderr(err):
-            cli._render_compare_csv(self._payload())
+            render._render_compare_csv(self._payload())
         return list(csv.DictReader(io.StringIO(buf.getvalue()))), err.getvalue()
 
     def test_one_row_per_matched_group_with_both_sides_side_by_side(self):
@@ -743,7 +743,7 @@ class OneSourceCanContributeSeveralListings(unittest.TestCase):
                                           ("airbnb", 22.0))}
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf), redirect_stderr(io.StringIO()):
-            cli._render_compare_csv(payload)
+            render._render_compare_csv(payload)
         row = next(csv.DictReader(io.StringIO(buf.getvalue())))
         self.assertEqual(row["n_sources"], "2")
         self.assertEqual(row["n_listings"], "3")
@@ -756,7 +756,7 @@ class OneSourceCanContributeSeveralListings(unittest.TestCase):
                                           ("airbnb", 22.0))}
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf), redirect_stderr(io.StringIO()):
-            cli._render_compare_csv(payload)
+            render._render_compare_csv(payload)
         row = next(csv.DictReader(io.StringIO(buf.getvalue())))
         self.assertEqual(row["airbnb_price_usd"], "22.0")
         self.assertEqual(row["airbnb_n"], "2")
@@ -857,7 +857,7 @@ class SpreadsheetFormulasDoNotSurviveTheCsv(unittest.TestCase):
                    "coverage": {"complete": True, "note": None}}
         buf, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(buf), redirect_stderr(err):
-            cli._render_csv(payload)
+            render._render_csv(payload)
         return list(csv.DictReader(io.StringIO(buf.getvalue()))), err.getvalue()
 
     def test_every_formula_trigger_is_neutralised(self):
@@ -890,7 +890,7 @@ class SpreadsheetFormulasDoNotSurviveTheCsv(unittest.TestCase):
                    "coverage": {"complete": True, "note": None}}
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf), redirect_stderr(io.StringIO()):
-            cli._render_csv(payload)
+            render._render_csv(payload)
         self.assertTrue(next(csv.DictReader(io.StringIO(buf.getvalue())))["url"]
                         .startswith("'"))
 
@@ -908,7 +908,7 @@ class SpreadsheetFormulasDoNotSurviveTheCsv(unittest.TestCase):
                                                               threshold=0.5)}
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf), redirect_stderr(io.StringIO()):
-            cli._render_compare_csv(payload)
+            render._render_compare_csv(payload)
         row = next(csv.DictReader(io.StringIO(buf.getvalue())))
         self.assertTrue(row["klook_title"].startswith("'"))
 
@@ -933,7 +933,7 @@ class EmitRoutesTheFormatItWasAsked(unittest.TestCase):
         args = argparse.Namespace(**{"csv": False, "json": False, **flags})
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf), redirect_stderr(io.StringIO()):
-            cli._emit(self._payload(), args)
+            render._emit(self._payload(), args)
         return buf.getvalue()
 
     def test_csv_reaches_the_csv_renderer(self):

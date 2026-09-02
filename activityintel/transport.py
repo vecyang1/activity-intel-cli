@@ -49,6 +49,19 @@ class CacheMiss(TransportError):
     """--cache-only was requested and this URL is not cached."""
 
 
+# Failures that must STOP a sweep, not be recorded against one query and
+# stepped over. `sweep.sweep` and `airbnb.sweep_place` both catch `Exception`
+# per query so that one dead keyword does not discard the other nine — and
+# until 2026-09-02 that catch also swallowed these. Measured with a fake
+# client: after the first 429 the Klook loop sent 26 more requests to the
+# throttling host (each already three retries deep) and the run exited 7,
+# PARTIAL — "the market is small" — instead of 5, RATE_LIMIT — "we were told
+# to stop". A robots verdict is the same shape: a policy answer, not a flaky
+# keyword. Both loops re-raise this tuple before their generic catch; the
+# CLI maps it to the exit code the docstring in `exit_codes` promises.
+INCIDENTS = (RateLimited, robots.Disallowed, robots.RobotsUnavailable)
+
+
 class Client:
     """Cache-first, pace-governed reader for public OTA endpoints.
 

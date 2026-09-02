@@ -11,7 +11,7 @@ import _sandbox  # noqa: F401  -- MUST be first
 import unittest
 import urllib.error
 
-from activityintel import cli, model, places, robots
+from activityintel import cli, model, places, render, robots
 from activityintel.model import RATED, UNKNOWN, Activity
 from activityintel.sources import airbnb, klook
 
@@ -251,7 +251,7 @@ class PriceUnitIsThreeState(unittest.TestCase):
         row["score"] = 4.5
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(io.StringIO()):
-            cli._render_table({"activities": [row], "coverage": {}})
+            render._render_table({"activities": [row], "coverage": {}})
         out = buf.getvalue()
         self.assertIn("$30", out)
         self.assertNotIn("/pp", out)

@@ -30,7 +30,7 @@ three axes:
 | Source | robots.txt | Reachable | Status | Why |
 |---|---|---|---|---|
 | **Airbnb Experiences** | `/api/v3/ExperiencesSearch/` **allowed**; `/s/*/*` **disallowed** | Yes, cookieless | **ENABLED** | Uses the allowed API path only. 219 Hanoi experiences with price, rating, reviews, duration, neighbourhood, category. |
-| **Viator** | API host unrestricted | Yes (needs key) | **READY, needs owner key** | The only *sanctioned* route: Basic Access is free, self-serve, no traffic minimum. Adapter written, unit-tested, **never run against a live key**. |
+| **Viator** | API host unrestricted | Yes (needs key) | **PARSER ONLY — not wired** | The only *sanctioned* route: Basic Access is free, self-serve, no traffic minimum. Parser and key resolver written and unit-tested; **no command fetches from it** (its search is a POST, the transport has none). A key makes every command report `not wired`, exit 7. See below. |
 | **Klook** | `Disallow: */search/*` — **matches our endpoint** | Search API yes (HTTP 200); activity pages **403** | **OFF by default — `--ignore-robots` enables** | 1,023 Hanoi listings with price, rating, review count. Free-text keyword search, unlike Airbnb. Prices always HKD. See below. |
 | GetYourGuide | unreadable (403) | No | SKIP | Partner API requires **100,000 monthly visits**. |
 | TripAdvisor | attractions allowed | No — DataDome 403 | SKIP | Content API returns POIs, not bookable tours; its activity inventory *is* Viator's. |
@@ -83,6 +83,19 @@ policy *and* that the override still reaches it.
 | `aggr_condition.filter_list` offers Price range / Others / Location only | There is no server-side language filter to reach for |
 | **The search mixes verticals.** 441 of 1,072 Hanoi rows were hotel rooms; `data.category` said "Hotels" and `deep_link` pointed at `/hotels/detail/`, but the structural signal is `card_name` = `web_search_hotel_activity_01` (and numeric `data.vertical_type` = 102) | An activity catalogue must filter on the vertical, never the localized category label. `klook.split_verticals` keeps `ttd`/`fnd`, drops `hotel`/`carrental` **with counts**, and keeps an unknown vertical while naming it |
 | A `ttd` card can carry `vertical_type` 104 and a `deep_link` to `/airport-transfers/?...` rather than `/activity/` | The URL path is not a reliable discriminator — a private airport transfer is a real bookable service Klook files under things-to-do. Key on the vertical |
+
+## Viator — why a key alone changes nothing
+
+Measured 2026-09-02, with an invented key in the environment:
+`catalog hanoi --sources viator` returned `activities: []`,
+`coverage.complete: true`, exit `0`. The source was "available" (key present)
+and no command had a sweep for it, so an empty answer read as a complete one.
+Since v1.5.0 `cli.SWEEPABLE` names the sources a command can actually ask
+(`klook`, `airbnb`), `compare` counts only those, `doctor` reports "key
+present, not wired", and `cmd_catalog` refuses to finish without a coverage
+entry for every source it was asked about. Wiring Viator needs a `POST` on the
+transport chokepoint and a `fetch_search` in the adapter — and a live key to
+prove the first `200`, which is the owner's to create.
 
 ## The distinction this file exists to hold
 

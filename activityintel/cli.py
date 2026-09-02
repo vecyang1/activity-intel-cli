@@ -9,19 +9,33 @@ from __future__ import annotations
 
 import argparse
 import collections
-import csv
 import dataclasses
 import json
 import os
 import sys
 
-from . import config, exit_codes, model, robots, store, sweep, transport
+from . import config, doctor, exit_codes, model, robots, store, sweep, transport
+from .render import _emit, _emit_compare
 from . import places
 from .places import PLACES, resolve_place
-from .sources import airbnb, klook, viator
+from .sources import REGISTRY, airbnb, klook, viator
 
-ALL_SOURCES = {klook.NAME: klook, airbnb.NAME: airbnb, viator.NAME: viator}
-SOURCES = {n: m for n, m in ALL_SOURCES.items() if getattr(m, "AVAILABLE", True)}
+ALL_SOURCES = REGISTRY
+
+# The sources a command can actually SWEEP. Viator has a parser and a key
+# resolver but no fetch: its search is a POST, the transport has no POST, and
+# no `cmd_*` block asks it anything. Being *available* (key present) and being
+# *askable* are different facts, and until 2026-09-02 they were collapsed —
+# `catalog hanoi --sources viator` with a key returned zero rows,
+# `complete: true`, exit 0. This set is what `compare` counts and what `doctor`
+# reports; `cmd_catalog` additionally refuses to finish without a coverage
+# entry for every wanted source, so a source added to ALL_SOURCES and
+# forgotten below lands as "not wired", never as silence.
+SWEEPABLE = frozenset({klook.NAME, airbnb.NAME})
+NOT_WIRED_NOTE = ("not wired: this build has no sweep for this source, so it "
+                  "was enabled but never asked and nothing from it is in this "
+                  "result. Viator needs a POST transport and a fetch_search "
+                  "before a key makes any difference.")
 
 
 def source_available(mod, *, ignore_robots: bool = False) -> bool:
@@ -107,167 +121,6 @@ def _client(args) -> tuple[transport.Client, object]:
     client = transport.Client(conn, allow_network=not getattr(args, "cache_only", False),
                              gap_s=getattr(args, "gap", None), robots_gate=gate)
     return client, conn
-
-
-def _emit(payload: dict, args) -> None:
-    if getattr(args, "csv", False):
-        _render_csv(payload)
-        return
-    if getattr(args, "json", False):
-        print(json.dumps(payload, ensure_ascii=False, indent=2))
-        return
-    _render_table(payload)
-
-
-# The flat columns, in the order a reader wants them. Deliberately explicit
-# rather than "whatever keys the first row happens to have": a dict-derived
-# header silently changes shape when a source stops setting a field, and the
-# column that vanishes is the one nobody was watching.
-CSV_COLUMNS = (
-    "source", "vertical", "source_id", "title", "category", "city",
-    "score", "rating", "rating_state", "review_count",
-    "price_usd", "price_amount", "price_currency", "price_display", "price_unit",
-    "duration_text", "booked_count", "languages", "tags",
-    "lat", "lng", "url", "image_url",
-)
-
-
-# Excel, Sheets and LibreOffice evaluate a cell that begins with any of these.
-# Listing titles are written by third-party sellers, and `--csv` exists to be
-# opened in a spreadsheet, so a title of `=HYPERLINK("http://x")` is a live
-# formula on open (CWE-1236). `QUOTE_MINIMAL` does not help: it quotes on
-# delimiters and has no concept of a formula.
-_CSV_TRIGGERS = ("=", "+", "-", "@", "\t", "\r")
-
-
-def _csv_safe(value, counter: list) -> object:
-    """Neuter a spreadsheet formula trigger, and count that we did.
-
-    Only in CSV. `--json` stays byte-faithful — it is the lossless channel and
-    the hazard lives entirely in the spreadsheet. This project does not rewrite
-    source values silently anywhere else (`price_amount` is never converted in
-    place), so the count is printed to stderr rather than the change being
-    smuggled into a data file.
-    """
-    if isinstance(value, str) and value[:1] in _CSV_TRIGGERS:
-        counter.append(value)
-        return "'" + value
-    return value
-
-
-def _render_csv(payload: dict) -> None:
-    """Flatten to CSV on stdout, warnings to stderr.
-
-    Two things this must not do, both of which a naive `csv.DictWriter` over
-    `to_dict()` does by default:
-
-    * **Print a coverage warning into the data.** `--csv` exists to be piped
-      into a spreadsheet; a note in the stream becomes a row. It goes to stderr,
-      where a human still sees it and a pipe does not.
-    * **Let a three-state field become two-state.** `rating: None` must render
-      as an *empty cell*, never `0` and never the string `"None"` — a reader
-      sorts that column, and a new listing scored 0 sorts below a one-star one.
-      Same for `price_usd`, which is null precisely when we have no honest rate.
-    """
-    rows = payload.get("activities") or []
-    neutered: list = []
-    writer = csv.DictWriter(sys.stdout, fieldnames=CSV_COLUMNS,
-                            extrasaction="ignore", lineterminator="\n")
-    writer.writeheader()
-    for a in rows:
-        out = {}
-        for col in CSV_COLUMNS:
-            v = a.get(col)
-            if col == "price_unit":
-                v = model.price_unit(a.get("tags"))
-            if isinstance(v, (list, tuple)):
-                v = ";".join(str(x) for x in v)
-            # None -> "" is the whole point. csv would write "" for None anyway,
-            # but going through str() first (which some refactor will add) would
-            # write the literal "None", so the branch is explicit and tested.
-            out[col] = "" if v is None else _csv_safe(v, neutered)
-        writer.writerow(out)
-
-    _warn_neutered(neutered)
-    cov = payload.get("coverage") or {}
-    note = cov.get("note")
-    if note or cov.get("complete") is False:
-        print(f"[coverage] {note or 'this sweep is not complete'}", file=sys.stderr)
-
-
-def _warn_neutered(neutered: list) -> None:
-    if not neutered:
-        return
-    print(f"[csv] {len(neutered)} cell(s) began with a spreadsheet formula "
-          f"character and were prefixed with an apostrophe so they open as "
-          f"text; --json is unmodified. First: {neutered[0][:60]!r}",
-          file=sys.stderr)
-
-
-def _render_table(payload: dict) -> None:
-    rows = payload.get("activities") or []
-    cov = payload.get("coverage") or {}
-
-    if not rows:
-        print("no activities returned")
-    else:
-        print(f"{'SCORE':>6}  {'RATING':>6}  {'REVIEWS':>7}  {'PRICE':>16}  "
-              f"{'DUR':>8}  SOURCE   TITLE")
-        print("-" * 100)
-        for a in rows:
-            if a["rating_state"] == model.RATED:
-                rating = f"{a['rating']:.2f}"
-                reviews = str(a["review_count"] if a["review_count"] is not None else "?")
-            elif a["rating_state"] == model.UNRATED:
-                rating, reviews = "new", "0"
-            else:
-                rating, reviews = "?", "?"
-            # Show the unit AND one currency. A per-group $197 next to a
-            # per-guest $23 is not expensive, it is a different unit; and a
-            # Klook HK$236 next to an Airbnb $33 is not 7x pricier, it is a
-            # different currency. Truncating either away is how a price table
-            # starts lying. USD is the comparison column when we have an honest
-            # rate; otherwise the native price is shown, never a guess.
-            amt = a.get("price_amount")
-            usd = a.get("price_usd")
-            cur = a.get("price_currency") or ""
-            # Three states, like rating. Only Airbnb states a pricing unit; a
-            # bare "/pp" on a Klook row would assert per-person on the strength
-            # of nothing, and a per-group total shown as a per-person rate
-            # understates the cost by roughly the group size. Blank = unstated.
-            unit = model.price_unit(a.get("tags"))
-            suffix = {"group": "/grp", "guest": "/pp"}.get(unit, "")
-            if usd is not None:
-                price = f"${usd:g}{suffix}"
-                if cur and cur != "USD":
-                    price += f" ({cur})"
-            elif amt is not None:
-                price = f"{cur} {amt:g}{suffix} ?"   # '?' = not comparable
-            else:
-                price = "—"
-            dur = a.get("duration_text") or "—"
-            sc = a.get("score")
-            score = f"{sc:.3f}" if isinstance(sc, float) else "—"
-            print(f"{score:>6}  {rating:>6}  {reviews:>7}  {price[:16]:>16}  "
-                  f"{dur[:8]:>8}  {a['source']:<8} {a['title'][:42]}")
-        print("-" * 100)
-        print(f"{len(rows)} activities")
-
-    unstated = sum(1 for a in rows
-                   if a.get("price_amount") is not None
-                   and model.price_unit(a.get("tags")) is None)
-    if unstated:
-        print(f"[price] {unstated} of {len(rows)} rows carry no pricing unit "
-              f"(no /pp or /grp) — that source does not state one. Do not read "
-              f"a blank unit as per-person.", file=sys.stderr)
-
-    note = cov.get("note")
-    if note:
-        # stderr so --json / piped consumers stay clean while a human still sees it
-        print(f"\n[coverage] {note}", file=sys.stderr)
-    if cov.get("complete") is False:
-        print("[coverage] this result is a SAMPLE, not a complete catalogue.",
-              file=sys.stderr)
 
 
 def _sorted(activities, order: str):
@@ -359,8 +212,8 @@ def cmd_catalog(args, *, emit: bool = True) -> tuple[int, dict] | int:
                 queries = (place.klook_query,) + tuple(place.extra_queries)
             report = sweep.sweep(
                 client, klook, queries,
-                page_size=min(args.size or klook.MAX_PAGE_SIZE, klook.MAX_PAGE_SIZE),
-                max_pages=args.max_pages, lang=args.lang)
+                page_size=min(args.size, klook.MAX_PAGE_SIZE),
+                max_pages=args.max_pages)
 
             # Klook answers EVERY query with something — a nonsense string
             # returns a confident page of Taipei listings, and the Hanoi union
@@ -421,6 +274,10 @@ def cmd_catalog(args, *, emit: bool = True) -> tuple[int, dict] | int:
                 "note": " ".join(n for n in notes if n) or None,
                 "queries": len(report.queries),
                 "capped_queries": report.capped_queries,
+                # Which keywords failed and the first fault verbatim. A count
+                # alone made a 429, a schema change and a DNS blip identical.
+                "failed_queries": report.failed_queries,
+                "first_error": report.first_error,
                 "tag_health": health,
             }
             coverage["complete"] &= report.is_complete
@@ -435,13 +292,22 @@ def cmd_catalog(args, *, emit: bool = True) -> tuple[int, dict] | int:
                 res = airbnb.sweep_place(client, place.airbnb_place_id,
                                          place.airbnb_query,
                                          categories=args.categories,
-                                         size=args.size or airbnb.PAGE_SIZE,
-                                         language=getattr(args, "language", None))
+                                         size=args.size,
+                                         language=getattr(args, "language", None),
+                                         max_pages=args.max_pages)
                 combined.extend(res["activities"])
                 note = None
                 if res["incomplete_passes"]:
                     note = ("passes that did not reach the end: "
                             + ", ".join(res["incomplete_passes"][:6]))
+                    # Name the fault, not just the passes. "(unfiltered),
+                    # Cooking, …" was the whole message for a cold cache under
+                    # --cache-only; the cause lived only in passes[].error,
+                    # which the table and CSV renderers never show.
+                    first_err = next((p["error"] for p in res["passes"]
+                                      if p.get("error")), None)
+                    if first_err:
+                        note += f". First error: {first_err}"
                 coverage["sources"][airbnb.NAME] = {
                     "returned": len(res["activities"]),
                     "complete": res["complete"], "note": note,
@@ -459,6 +325,17 @@ def cmd_catalog(args, *, emit: bool = True) -> tuple[int, dict] | int:
         return (exit_codes.UPSTREAM, {}) if not emit else exit_codes.UPSTREAM
     finally:
         conn.close()
+
+    # Every wanted source must own a coverage entry by now. One that does not
+    # was enabled and never asked — the Viator shape — and "we did not ask"
+    # must never render as "nothing there". Structural on purpose: it keys on
+    # the absence of an entry, not on a list of names, so the next source
+    # registered and forgotten above is caught by the same line.
+    for name in wanted:
+        if name not in coverage["sources"]:
+            coverage["sources"][name] = {"returned": 0, "complete": False,
+                                         "skipped": True, "note": NOT_WIRED_NOTE}
+            coverage["complete"] = False
 
     # `returned` is read as "how much did this source give me". It was computed
     # before this filter ran, so `--match cooking` on Hanoi handed the caller 59
@@ -519,14 +396,25 @@ def cmd_compare(args) -> int:
     """
     args.match = None
     args.categories = None
+    # The cap applies to GROUPS, so the catalogue underneath must be whole:
+    # capping rows before matching would hide pairs, not rank them.
+    limit = getattr(args, "limit", 0) or 0
     args.limit = 0
     args.sort = "none"
 
     live = enabled_sources(bool(getattr(args, "ignore_robots", False)))
-    if len(live) < 2:
-        print(f"error: compare needs at least two enabled sources, have "
-              f"{sorted(live) or 'none'}. Klook is off until --ignore-robots; "
-              f"Viator needs a key. Nothing to compare against.", file=sys.stderr)
+    # Count sources that can be ASKED, not merely enabled. A keyed Viator
+    # passed this gate as a second platform and was then compared against
+    # nothing, so "no cross-listings found" read as a finding.
+    askable = sorted(n for n in live if n in SWEEPABLE)
+    unwired = sorted(set(live) - set(askable))
+    if len(askable) < 2:
+        print(f"error: compare needs at least two enabled sources with a sweep "
+              f"wired, have {askable or 'none'}."
+              + (f" Enabled but not wired in this build: {', '.join(unwired)}."
+                 if unwired else "")
+              + " Klook is off until --ignore-robots; Viator needs a key AND a "
+              "sweep. Nothing to compare against.", file=sys.stderr)
         return exit_codes.CONFIG
 
     rc, captured = cmd_catalog(args, emit=False)
@@ -535,9 +423,13 @@ def cmd_compare(args) -> int:
                               if k in _ACTIVITY_FIELDS})
             for a in captured.get("activities", [])]
     groups = model.find_cross_source_matches(rows, threshold=args.threshold)
+    # `--limit` used to be accepted here and overwritten with 0, so
+    # `compare hanoi --limit 1` returned all 45 groups (measured 2026-09-02).
+    # `match_count` stays what was FOUND; `shown` is what survived the cap.
+    shown = groups[:limit] if limit else groups
 
-    payload = {"city": captured.get("city"), "matches": groups,
-               "match_count": len(groups),
+    payload = {"city": captured.get("city"), "matches": shown,
+               "match_count": len(groups), "shown": len(shown),
                "scanned": len(rows),
                "coverage": captured.get("coverage")}
     _emit_compare(payload, args)
@@ -545,119 +437,6 @@ def cmd_compare(args) -> int:
 
 
 _ACTIVITY_FIELDS = {f.name for f in dataclasses.fields(model.Activity)}
-
-
-def _emit_compare(payload: dict, args) -> None:
-    if getattr(args, "csv", False):
-        _render_compare_csv(payload)
-        return
-    if getattr(args, "json", False):
-        print(json.dumps(payload, ensure_ascii=False, indent=2))
-        return
-    _render_compare(payload)
-
-
-def _render_compare_csv(payload: dict) -> None:
-    """One row per matched group, both platforms side by side.
-
-    The per-source columns come from the SOURCE REGISTRY, not from whichever
-    sources happen to appear in the first match. A header that changes shape
-    with the data is unusable as a spreadsheet and hides the case that matters:
-    a run where one platform contributed nothing at all.
-    """
-    order = list(ALL_SOURCES)
-    # `n_sources` counts PLATFORMS, `n_listings` counts rows. They differ
-    # whenever one platform lists the same experience twice, which is 9 of 44
-    # live Hanoi groups — and a column named `n_sources` reading 6 for a
-    # two-platform group is worse than no column.
-    cols = ["group", "n_sources", "n_listings", "similarity", "spread_usd",
-            "cheapest_source"]
-    for src in order:
-        cols += [f"{src}_n", f"{src}_title", f"{src}_price_usd", f"{src}_rating",
-                 f"{src}_reviews", f"{src}_url"]
-    neutered: list = []
-    w = csv.DictWriter(sys.stdout, fieldnames=cols, extrasaction="ignore",
-                       lineterminator="\n")
-    w.writeheader()
-    for i, g in enumerate(payload.get("matches") or [], start=1):
-        # `spread_usd` and `cheapest_source` are null whenever fewer than two
-        # comparable prices exist. Writing a 0 spread there would assert the two
-        # platforms charge the same, which is the opposite of "we could not
-        # compare" — so they stay empty, exactly like an unrated rating.
-        row = {"group": i,
-               "n_sources": len(g.get("members_by_source") or {}),
-               "n_listings": g.get("members_count"),
-               "similarity": g.get("similarity"),
-               "spread_usd": "" if g.get("spread_usd") is None else g["spread_usd"],
-               "cheapest_source": g.get("cheapest_source") or ""}
-        # A source can contribute several listings, and the group's own
-        # `price_usd_by_source` already reduced them to the cheapest. Render the
-        # member that price came from, not whichever one iterates last, or the
-        # row's title and its price describe two different listings.
-        chosen = g.get("price_usd_by_source") or {}
-        counts = g.get("members_by_source") or {}
-        picked: dict[str, dict] = {}
-        for m in g.get("members") or []:
-            src = m.get("source")
-            if src not in order:
-                continue
-            want = chosen.get(src)
-            cur = picked.get(src)
-            if cur is None:
-                picked[src] = m
-            elif want is not None and m.get("price_usd") == want \
-                    and cur.get("price_usd") != want:
-                picked[src] = m
-        for src, m in picked.items():
-            row[f"{src}_n"] = counts.get(src, 1)
-            row[f"{src}_title"] = m.get("title") or ""
-            usd = m.get("price_usd")
-            row[f"{src}_price_usd"] = "" if usd is None else usd
-            r = m.get("rating")
-            row[f"{src}_rating"] = "" if r is None else r
-            n = m.get("review_count")
-            row[f"{src}_reviews"] = "" if n is None else n
-            row[f"{src}_url"] = m.get("url") or ""
-        w.writerow({c: _csv_safe(row.get(c, ""), neutered) for c in cols})
-
-    _warn_neutered(neutered)
-    cov = payload.get("coverage") or {}
-    if cov.get("note") or cov.get("complete") is False:
-        print(f"[coverage] {cov.get('note') or 'this sweep is not complete'}",
-              file=sys.stderr)
-
-
-def _render_compare(payload: dict) -> None:
-    groups = payload.get("matches") or []
-    print(f"scanned {payload.get('scanned', 0)} listings in "
-          f"{payload.get('city')} — {len(groups)} likely cross-platform match(es)\n")
-    if not groups:
-        print("none found. Titles differ enough between platforms that no pair "
-              "cleared the similarity bar; lower it with --threshold to see more, "
-              "and expect false pairs when you do.")
-        return
-    for g in groups:
-        prices = g["price_usd_by_source"]
-        spread = g["spread_usd"]
-        head = ", ".join(g["shared_terms"][:5])
-        if spread is None:
-            verdict = "price gap unknown (a side has no comparable price)"
-        elif spread == 0:
-            verdict = "same price on both"
-        else:
-            verdict = f"${spread:g} cheaper on {g['cheapest_source']}"
-        print(f"~{g['similarity']:.2f} [{head}] — {verdict}")
-        for m in g["members"]:
-            usd = m.get("price_usd")
-            p = f"${usd:g}" if usd is not None else "—"
-            if m.get("rating") is not None:
-                q = f"{m['rating']:.2f}/{m.get('review_count', '?')}"
-            else:
-                q = "new"
-            print(f"    {m['source']:<8} {p:>8}  {q:>10}  {m['title'][:58]}")
-            if m.get("url"):
-                print(f"             {m['url']}")
-        print()
 
 
 def cmd_sources(args) -> int:
@@ -688,129 +467,27 @@ def cmd_sources(args) -> int:
 def cmd_doctor(args) -> int:
     """Live contract check: are the pinned endpoints still the real ones?
 
-    This is the command that turns 'the tool returned nothing' into a specific
-    diagnosis. It is separate from the unit suite on purpose: the suite runs
-    against fixtures and must stay hermetic, so only something that deliberately
-    touches the network can notice that an endpoint moved.
+    The checks themselves live in ``doctor.py``; this is the exit-code and
+    output-shape half.
     """
     # `doctor` reports a check list, not rows, so `--csv` has nothing to render.
     # It used to parse, exit 0 and print JSON — the same "you asked for CSV and
     # got something else" failure that `compare --csv` shipped with. Refusing is
-    # the honest answer; the flag reaches here only because `doctor` shares the
-    # common option block.
+    # the honest answer. The parser no longer offers the flag; this guard stays
+    # for a caller that builds the Namespace by hand.
     if getattr(args, "csv", False):
         print("error: doctor has no --csv output — it reports named checks, not "
               "rows. Use --json (the default shape) or drop the flag.",
               file=sys.stderr)
         return exit_codes.USAGE
 
-    ignore_robots = bool(getattr(args, "ignore_robots", False))
     client, conn = _client(args)
-    checks = []
-
-    def record(name, fn):
-        try:
-            detail = fn()
-            checks.append({"check": name, "ok": True, "detail": detail})
-        except Exception as exc:  # noqa: BLE001 — the point is to report it
-            checks.append({"check": name, "ok": False,
-                           "detail": f"{type(exc).__name__}: {exc}"})
-
-    def klook_default_off_check():
-        """Klook must be OFF unless the operator explicitly overrides robots.
-
-        Deliberately built with its own default-policy gate rather than the
-        caller's: running ``doctor --ignore-robots`` must not make this check
-        pass by adopting the very setting it is here to verify. A check that
-        cannot go red under the condition it guards is not evidence.
-        """
-        if source_available(klook, ignore_robots=False):
-            raise RuntimeError(
-                "klook is available under DEFAULT policy — it is robots-disallowed "
-                "and must require an explicit --ignore-robots")
-        if not source_available(klook, ignore_robots=True):
-            raise RuntimeError(
-                "klook is unavailable even WITH --ignore-robots — the override no "
-                "longer reaches the source, so the documented flag is a no-op")
-
-        strict = transport.Client(
-            store.connect(),
-            robots_gate=robots.RobotsGate(robots.default_fetcher, enabled=True))
-        try:
-            klook.fetch_search(strict, "Hanoi cooking class", page=1, size=5)
-        except robots.Disallowed:
-            return ("default policy: klook off and refused by the gate; "
-                    "--ignore-robots enables it")
-        except transport.TransportError as exc:
-            return f"klook unreachable ({type(exc).__name__}); still off by default"
-        finally:
-            strict.conn.close()
-        raise RuntimeError(
-            "klook search was NOT refused under default policy — robots.txt may have "
-            "changed, or the gate regressed. It was Disallow: */search/* on 2026-08-27.")
-
-    def klook_endpoint_check():
-        """Under override, is the pinned search endpoint still the real one?
-
-        Reported separately from the policy check above so 'we choose not to
-        read it' and 'it stopped working' never collapse into one status.
-        """
-        if not ignore_robots:
-            return "skipped — run doctor --ignore-robots to exercise the endpoint"
-        r = klook.fetch_search(client, "Hanoi cooking class", page=1, size=5)
-        n = len(r["activities"])
-        if n == 0:
-            raise RuntimeError("0 activities for a query known to have ~29 — the "
-                               "payload shape or the endpoint moved")
-        rated = sum(1 for a in r["activities"] if a.rating_state == model.RATED)
-        return (f"{n} activities, {rated} rated, total={r['total']}, "
-                f"capped={r['capped']}")
-
-    def airbnb_check():
-        place = PLACES["hanoi"]
-        r = airbnb.fetch_search(client, place.airbnb_query, size=5,
-                                place_id=place.airbnb_place_id)
-        n = len(r["activities"])
-        if n == 0:
-            raise RuntimeError("0 activities — persisted-query hash or key may have rotated")
-        priced = sum(1 for a in r["activities"] if a.price_amount is not None)
-        return f"{n} activities, {priced} priced, cursor={'yes' if r['next_cursor'] else 'no'}"
-
-    def robots_check():
-        gate = robots.RobotsGate(robots.default_fetcher)
-        gate.check("https://www.airbnb.com/api/v3/ExperiencesSearch/x")
-        try:
-            gate.check("https://www.airbnb.com/s/Hanoi--Vietnam/experiences")
-        except robots.Disallowed:
-            return "gate live: /api/v3 allowed, /s/*/* correctly refused"
-        raise RuntimeError(
-            "/s/*/* was NOT refused — robots.txt changed or the gate regressed. "
-            "That path was disallowed on 2026-08-26 and this tool must not fetch it.")
-
-    def tls_check():
-        """Does THIS interpreter trust anything? Measured, not assumed.
-
-        Added because the answer differed between the interpreter every check
-        ran under (/opt/homebrew/bin/python3, 193 CAs) and the one first on a
-        login shell's PATH (/usr/local/bin/python3, 0 CAs). Under the second,
-        every https call failed and the tool returned an honest, complete,
-        entirely empty catalogue.
-        """
-        ctx = config.ssl_context()
-        n = len(ctx.get_ca_certs())
-        if n == 0:
-            raise RuntimeError(config.tls_remedy())
-        return f"{n} CA certs available to {sys.executable}"
-
-    record("tls trust store", tls_check)
-    record("robots gate", robots_check)
-    record("klook off by default", klook_default_off_check)
-    record("klook search contract", klook_endpoint_check)
-    record("airbnb search contract", airbnb_check)
-    record("viator key", lambda: (
-        f"ready (key present in ${viator.KEY_ENV})" if viator.available()
-        else f"needs-key: {viator.UNAVAILABLE_REASON.splitlines()[0]}"))
-    conn.close()
+    try:
+        checks = doctor.run_checks(
+            client, ignore_robots=bool(getattr(args, "ignore_robots", False)),
+            source_available=source_available)
+    finally:
+        conn.close()
 
     ok = all(c["ok"] for c in checks)
     print(json.dumps({"ok": ok, "checks": checks}, ensure_ascii=False, indent=2))
@@ -835,6 +512,65 @@ def cmd_cache(args) -> int:
     return exit_codes.OK
 
 
+# -- argument validation ------------------------------------------------------
+#
+# argparse's `type=` is the one place a bad value can be refused BEFORE any
+# command runs, with the flag's own name in the message. Each validator below
+# replaces a silent misreading measured on 2026-09-02: `--limit -1` became
+# `rows[:-1]` and dropped the last row; `--size 0` was falsy and became the
+# default; `--max-pages 0` walked nothing and reported "hit the ceiling";
+# `--threshold 2` found nothing and blamed the titles; `--language xx` failed
+# every Airbnb pass with the cause buried in JSON.
+
+def _int_at_least(floor: int):
+    def parse(raw: str) -> int:
+        try:
+            value = int(raw)
+        except ValueError:
+            raise argparse.ArgumentTypeError(f"expected an integer, got {raw!r}")
+        if value < floor:
+            raise argparse.ArgumentTypeError(f"must be >= {floor}, got {value}")
+        return value
+    return parse
+
+
+def _float_at_least(floor: float):
+    def parse(raw: str) -> float:
+        try:
+            value = float(raw)
+        except ValueError:
+            raise argparse.ArgumentTypeError(f"expected a number, got {raw!r}")
+        if value < floor:
+            raise argparse.ArgumentTypeError(f"must be >= {floor:g}, got {value:g}")
+        return value
+    return parse
+
+
+def _unit_interval(raw: str) -> float:
+    try:
+        value = float(raw)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"expected a number in 0..1, got {raw!r}")
+    if not 0.0 <= value <= 1.0:
+        raise argparse.ArgumentTypeError(f"must be between 0 and 1, got {value:g}")
+    return value
+
+
+def _non_empty(raw: str) -> str:
+    if not raw.strip():
+        raise argparse.ArgumentTypeError("must not be empty")
+    return raw
+
+
+def _language(raw: str) -> str:
+    # The vocabulary belongs to the source that filters on it; the parser only
+    # consults it so the refusal carries the list instead of a shrug.
+    if raw not in airbnb.LANGUAGE_CODES:
+        raise argparse.ArgumentTypeError(
+            f"unknown language {raw!r}. Known: {', '.join(sorted(airbnb.LANGUAGE_CODES))}")
+    return raw
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         # Never hardcode prog. It was pinned to "python3 -m activityintel.cli"
@@ -849,26 +585,43 @@ def build_parser() -> argparse.ArgumentParser:
         description="Search bookable activities/experiences across OTA platforms.")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    def common(sp):
+    # Four option blocks, and every subcommand takes ONLY the blocks it reads.
+    # One shared block gave `doctor` a `--limit` and `--sort` it ignored and
+    # `compare` a `--sort` it overwrote — an options bag that silently drops
+    # whatever it does not destructure. argparse refusing is the honest answer,
+    # and it costs a reader nothing they would not have paid at exit 0.
+
+    def output_opts(sp, *, csv: bool = True):
         fmt = sp.add_mutually_exclusive_group()
         fmt.add_argument("--json", action="store_true", help="machine-readable output")
-        fmt.add_argument("--csv", action="store_true",
-                         help="flat CSV on stdout for a spreadsheet; coverage "
-                              "warnings go to stderr so the pipe stays clean")
-        sp.add_argument("--limit", type=int, default=0, help="max rows (0 = all)")
-        sp.add_argument("--sort",
-                        choices=("score", "rating", "reviews", "price", "none"),
-                        default="score",
-                        help="score = rating shrunk toward the population mean by "
-                             "review volume (default); rating = raw average")
-        sp.add_argument("--size", type=int, default=50, help="page size (clamped per source)")
-        sp.add_argument("--max-pages", type=int, default=20)
-        sp.add_argument("--lang", default="en_US")
-        sp.add_argument("--gap", type=float, default=None,
-                        help="seconds between requests to one host")
-        sp.add_argument("--language", default=None,
+        if csv:
+            fmt.add_argument("--csv", action="store_true",
+                             help="flat CSV on stdout for a spreadsheet; coverage "
+                                  "warnings go to stderr so the pipe stays clean")
+
+    def list_opts(sp, *, sort: bool = True):
+        sp.add_argument("--limit", type=_int_at_least(0), default=0,
+                        help="max rows (0 = all)")
+        if sort:
+            sp.add_argument("--sort",
+                            choices=("score", "rating", "reviews", "price", "none"),
+                            default="score",
+                            help="score = rating shrunk toward the population mean "
+                                 "by review volume (default); rating = raw average")
+
+    def sweep_opts(sp):
+        sp.add_argument("--size", type=_int_at_least(1), default=50,
+                        help="page size (clamped per source)")
+        sp.add_argument("--max-pages", type=_int_at_least(1), default=20,
+                        help="pages to walk per query (Klook) or per pass (Airbnb) "
+                             "before the sweep reports PARTIAL")
+        sp.add_argument("--language", type=_language, default=None,
                         help="only experiences offered in this language "
-                             "(e.g. zh, en, ko, ja) — server-side filter")
+                             "(e.g. zh, en, ko, ja) — server-side filter (Airbnb)")
+
+    def network_opts(sp):
+        sp.add_argument("--gap", type=_float_at_least(0.0), default=None,
+                        help="seconds between requests to one host")
         sp.add_argument("--cache-only", action="store_true",
                         help="fail instead of touching the network")
         sp.add_argument("--ignore-robots", action="store_true",
@@ -879,11 +632,11 @@ def build_parser() -> argparse.ArgumentParser:
                              "bot-protection blocks, which stay refused.")
 
     s = sub.add_parser("search", help="keyword search within a city")
-    s.add_argument("query")
+    s.add_argument("query", type=_non_empty)
     s.add_argument("city")
     s.add_argument("--sources", nargs="*", choices=list(ALL_SOURCES),
                    help="default: sources enabled under current policy")
-    common(s)
+    output_opts(s); list_opts(s); sweep_opts(s); network_opts(s)
     s.set_defaults(func=cmd_search)
 
     c = sub.add_parser("catalog", help="full city catalogue across sources")
@@ -892,7 +645,7 @@ def build_parser() -> argparse.ArgumentParser:
                    help="default: sources enabled under current policy")
     c.add_argument("--categories", nargs="*", help="Airbnb category names to sweep")
     c.add_argument("--match", help="client-side substring filter on title/description")
-    common(c)
+    output_opts(c); list_opts(c); sweep_opts(c); network_opts(c)
     c.set_defaults(func=cmd_catalog)
 
     cp = sub.add_parser("compare",
@@ -900,17 +653,22 @@ def build_parser() -> argparse.ArgumentParser:
                              "price the gap")
     cp.add_argument("city")
     cp.add_argument("--sources", nargs="*", choices=list(ALL_SOURCES))
-    cp.add_argument("--threshold", type=float, default=model.DEFAULT_MATCH_THRESHOLD,
+    cp.add_argument("--threshold", type=_unit_interval,
+                    default=model.DEFAULT_MATCH_THRESHOLD,
                     help="title similarity floor (0-1). Lower finds more pairs "
                          "and more false ones")
-    common(cp)
+    # Groups are ordered by price spread, so there is no --sort to offer; the
+    # --limit caps groups, and `shown` says how many survived it.
+    output_opts(cp); list_opts(cp, sort=False); sweep_opts(cp); network_opts(cp)
     cp.set_defaults(func=cmd_compare)
 
     v = sub.add_parser("sources", help="list sources, limits, and known places")
     v.set_defaults(func=cmd_sources)
 
     d = sub.add_parser("doctor", help="live check that pinned endpoints still work")
-    common(d)
+    # `doctor` reports named checks, not rows: no rows to limit, sort, page
+    # or flatten, so it takes none of those flags. `--json` is its native shape.
+    output_opts(d, csv=False); network_opts(d)
     d.set_defaults(func=cmd_doctor)
 
     ca = sub.add_parser("cache", help="cache stats, or purge")
@@ -918,7 +676,6 @@ def build_parser() -> argparse.ArgumentParser:
     ca.set_defaults(func=cmd_cache)
 
     return p
-
 
 def _force_utf8_stdout() -> None:
     """A Vietnamese title must not truncate the output file.
@@ -942,7 +699,14 @@ def _force_utf8_stdout() -> None:
 def main(argv=None) -> int:
     _force_utf8_stdout()
     args = build_parser().parse_args(argv)
-    return args.func(args)
+    try:
+        return args.func(args)
+    except store.StoreUnavailable as exc:
+        # Every command opens the store first. A read-only or missing state
+        # directory used to escape as a bare traceback and exit 1 — from a
+        # tool whose exit codes exist so a caller can branch on the cause.
+        print(f"error: {exc}", file=sys.stderr)
+        return exit_codes.CONFIG
 
 
 if __name__ == "__main__":
