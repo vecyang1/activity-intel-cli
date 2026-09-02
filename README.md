@@ -39,6 +39,7 @@ activity-intel catalog hanoi                        # full city catalogue
 activity-intel catalog hanoi --language zh          # Chinese-guided only (Airbnb)
 activity-intel search "cooking class" hanoi
 activity-intel compare hanoi --ignore-robots        # same class, both platforms, price gap
+activity-intel compare hanoi --ignore-robots --limit 5   # the five widest gaps; `shown` vs `match_count`
 activity-intel cache                                # stats; --purge to clear
 
 activity-intel catalog hanoi --ignore-robots --csv   # flat CSV for a spreadsheet
@@ -72,13 +73,13 @@ from a temp directory to keep that true.
 
 ## What it returns
 
-Hanoi, verified 2026-08-28:
+Hanoi, verified live 2026-09-02 (the 2026-08-28 sweep read 232 / 630 / 862):
 
 | | listings | notes |
 |---|---|---|
-| Airbnb Experiences | 232 | 19-category union; server-side language filter |
-| Klook | 630 | needs `--ignore-robots`; 391 in-city + 239 day trips |
-| **combined** | **862** | 668 rated, 194 new, 861 with USD prices |
+| Airbnb Experiences | 227 | 19-category union; server-side language filter |
+| Klook | 630 | needs `--ignore-robots`; 390 in-city + 240 day trips |
+| **combined** | **857** | 668 rated, 189 new, 856 with USD prices |
 
 **That Klook number used to read 1,025, and 411 of those were hotel rooms.**
 Klook answers a things-to-do query with whatever it sells — rooms at
@@ -91,7 +92,7 @@ and marks the difference only in its card type. See *Verticals* below.
  4.946    4.97      557            $32/pp   4.25 hr  airbnb   Hanoi Cooking Class with Local Market Tour
 ```
 
-## Five design decisions worth knowing before you trust the output
+## Six design decisions worth knowing before you trust the output
 
 **Ranking is a lower confidence bound, not the raw average.** Sorting by rating
 put a 5.00-from-2-reviews above a 4.98-from-1,387 on the live Hanoi set. Those
@@ -132,6 +133,16 @@ indistinguishable from a small market. A vertical this build has never seen is
 would lose real listings, and waving it through silently is exactly how 441
 hotel rooms got into an activity catalogue unnoticed.
 
+**An incident stops the run; a dead keyword does not.** A `429`/`403` that
+survives three retries, or a robots.txt verdict arriving mid-sweep, is a fact
+about the *host*, not about one keyword: the sweep stops at once and exits `5`
+(RATE_LIMIT) or `3` (CONFIG). Until v1.5.0 both were caught per query, the
+run kept sending to the host that had said stop, and it exited `7` — a
+throttled sweep reading as a small market, which is the one confusion the exit
+codes exist to prevent. A plain `5xx` after retries on one keyword is still
+recorded against that keyword and the others continue; `coverage` names the
+failed keywords and the first error verbatim.
+
 **Cross-platform matches are reported, never merged.** `compare` finds the same
 experience on two platforms and prices the gap — "Ninh Binh Day Tour from Ha
 Noi" was $33.46 on Klook (4.80★, 2,862 reviews) and $161 on Airbnb (5.00★, 1
@@ -163,8 +174,14 @@ The flag does **not** defeat bot protection. Klook's activity detail pages
 return 403 (Akamai) and stay unread — which is why Klook cannot tell you whether
 a class is taught in Chinese. Use `--language zh` on Airbnb for that.
 
-**Viator** is written and unit-tested but needs a free self-serve key you must
-create yourself (`VIATOR_API_KEY`). An agent must not create the account.
+**Viator** has a parser, a key resolver and **no sweep**: its search is a
+`POST`, the transport only speaks `GET`, and no command asks it anything. Setting
+`VIATOR_API_KEY` therefore changes exactly one thing — every command reports the
+source as `not wired` and exits `7`, and `doctor` says the same — rather than
+the previous behaviour, which returned zero rows, `complete: true` and exit `0`.
+The wiring waits on the key, because a POST path that has never seen a live
+`200` is a path nobody has executed. The key is a free self-serve signup you
+must do yourself; an agent must not create the account.
 
 Full table and reasoning in [docs/SOURCES.md](docs/SOURCES.md).
 
@@ -195,6 +212,9 @@ Full terms in [NOTICE](NOTICE); the licence itself is in [LICENSE](LICENSE).
 ```
 bin/activity-intel  location-independent launcher — the shipped entry point
 activityintel/
+  cli.py         the single entry point: parser, policy, commands
+  render.py      table / CSV / JSON — where three-state fields are easiest to lose
+  doctor.py      the live contract checks behind `doctor`
   transport.py   the ONLY code that opens a socket — policy, cache, pacing
   robots.py      robots.txt gate, enforced in front of every request AND cache
   rfc9309.py     robots path matching — ours, because the stdlib's differs by
@@ -203,8 +223,7 @@ activityintel/
   places.py      per-city identifiers, aliases, and day-trip scope
   sweep.py       page walking + union + coverage honesty
   store.py       SQLite cache + cross-process pace + request log
-  sources/       adapters: build URLs, parse bodies, never fetch
-  cli.py         the single entry point
+  sources/       adapters: build URLs, parse bodies, never fetch; REGISTRY
 docs/SOURCES.md  what we may read and what we may not — read before adding a source
 ```
 
@@ -213,9 +232,9 @@ docs/SOURCES.md  what we may read and what we may not — read before adding a s
 ```bash
 # Both interpreters: the compliance verdict used to differ between them.
 for py in /opt/homebrew/bin/python3 /usr/local/bin/python3; do
-  PYTHONDONTWRITEBYTECODE=1 $py -B -m unittest discover -s tests -t tests   # 227 tests
+  PYTHONDONTWRITEBYTECODE=1 $py -B -m unittest discover -s tests -t tests   # 273 tests
 done
-python3 tools/mutate.py                   # 47/47 guards confirmed able to go red
+python3 tools/mutate.py                   # 65/65 guards confirmed able to go red
 activity-intel doctor                     # live contract, default policy
 activity-intel doctor --ignore-robots     # also exercises the Klook endpoint
 ```
@@ -225,11 +244,18 @@ test module, and it asserts the real database is untouched afterwards. The
 fixtures are unedited captured responses; a hand-written one hid a real bug once
 (`review_count` lives on `card.track_info`, not `card.data`).
 
-`tools/mutate.py` confirms all 47 guards turn the suite red — including reading
+`tools/mutate.py` confirms all 65 guards turn the suite red — including reading
 the cache before the robots gate, falling back to the version-dependent stdlib
 path matcher, widening the per-host override to a global switch, letting a
-stated zero become a `0.0` rating, and naming a cheapest platform when only one
-side had a price.
+stated zero become a `0.0` rating, naming a cheapest platform when only one
+side had a price, recording a `429` against one keyword instead of stopping,
+and letting a keyed source that no command can ask report `complete`.
+
+Every flag a command offers is read by that command, and a value it cannot use
+is refused at parse time with the flag's name: `--limit -1` used to drop the
+last row, `--size 0` became 50, `--threshold 2` found nothing and blamed the
+titles, `doctor --limit 3` was accepted and ignored. `--lang` is gone — Klook's
+`k_lang` was measured to change nothing and it never reached Airbnb.
 
 **Run it under both interpreters.** Until 2026-08-28 the gate's verdict depended
 on which `python3` was first on PATH: `urllib.robotparser` ignores a mid-path

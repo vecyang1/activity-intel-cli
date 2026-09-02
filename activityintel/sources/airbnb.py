@@ -41,7 +41,7 @@ import base64
 import json
 import urllib.parse
 
-from .. import config, model
+from .. import config, model, transport
 from ..model import Activity
 
 NAME = "airbnb"
@@ -228,7 +228,19 @@ def parse_search(body: str, *, fetched_at: float | None = None) -> dict:
     activities = [
         a for a in (_node_to_activity(n, fetched_at) for n in nodes) if a
     ]
-    pagination = results.get("paginationInfo") or {}
+    # The continuation flag gets the same contract check as the rows. Every
+    # real page — all 26 cached from a live Hanoi sweep on 2026-09-02,
+    # including the 20 last pages — carries `paginationInfo.nextPageCursor`,
+    # as an explicit null on the last one. So a MISSING key is a shape
+    # change, and reading it as "last page" would let `paginate` mark a
+    # one-page sample exhausted and the catalogue complete. Absent is not
+    # "no more".
+    pagination = results.get("paginationInfo")
+    if not isinstance(pagination, dict) or "nextPageCursor" not in pagination:
+        raise ContractError(
+            "Airbnb results has no paginationInfo.nextPageCursor. Every real "
+            "page carries it (null on the last page); its absence means the "
+            "persisted query changed shape, not that the pool ended.")
     return {
         "activities": activities,
         "next_cursor": pagination.get("nextPageCursor"),
@@ -398,7 +410,8 @@ def paginate(client, place_id: str, query: str, *, category_tag: str | None = No
 
 def sweep_place(client, place_id: str, query: str, *, categories=None,
                 size: int = PAGE_SIZE, currency: str = "USD",
-                language: str | None = None, on_progress=None) -> dict:
+                language: str | None = None, max_pages: int = MAX_PAGE,
+                on_progress=None) -> dict:
     """Union the per-category sweeps — the only route to a complete catalogue.
 
     Measured 2026-08-26: the *unfiltered* grid is a ranked feed that omits
@@ -423,7 +436,10 @@ def sweep_place(client, place_id: str, query: str, *, categories=None,
         try:
             items, exhausted = paginate(client, place_id, query,
                                         category_tag=tag, size=size,
-                                        currency=currency, language=language)
+                                        currency=currency, language=language,
+                                        max_pages=max_pages)
+        except transport.INCIDENTS:
+            raise           # a host-wide stop, not a fact about this pass
         except Exception as exc:  # noqa: BLE001 — recorded, never swallowed
             passes.append({"pass": label, "error": f"{type(exc).__name__}: {exc}",
                            "returned": 0, "new": 0, "exhausted": False})

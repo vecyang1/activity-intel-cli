@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import dataclasses
 
-from . import config
+from . import config, transport
 from .model import Activity
 
 
@@ -46,6 +46,13 @@ class SweepReport:
         return [q.query for q in self.queries if q.error]
 
     @property
+    def first_error(self) -> str | None:
+        """The first recorded failure, verbatim. A note that names the keywords
+        that failed and not the fault ("CacheMiss: not cached and --cache-only
+        was requested") sends the reader to the wrong remedy."""
+        return next((q.error for q in self.queries if q.error), None)
+
+    @property
     def is_complete(self) -> bool:
         """True only when every sub-query was fully walked without hitting a cap.
 
@@ -68,7 +75,7 @@ class SweepReport:
             bits.append(
                 f"{len(self.failed_queries)} quer{'y' if len(self.failed_queries) == 1 else 'ies'} "
                 f"failed ({', '.join(self.failed_queries[:5])}) — this union is missing "
-                f"whatever they would have contributed."
+                f"whatever they would have contributed. First error: {self.first_error}"
             )
         return " ".join(bits) if bits else None
 
@@ -125,6 +132,12 @@ def sweep(client, source, queries, *, page_size: int | None = None,
                 # Loop finished without breaking -> we stopped because we ran out
                 # of allowed pages, not because the source ran out of results.
                 capped = True
+        except transport.INCIDENTS:
+            # A rate limit or a robots verdict is an incident for the whole
+            # host, not a fact about this keyword. Recording it and moving to
+            # the next query would keep sending to a host that said stop, and
+            # exit PARTIAL for what was a refusal. See transport.INCIDENTS.
+            raise
         except Exception as exc:  # noqa: BLE001 — recorded, never swallowed
             error = f"{type(exc).__name__}: {exc}"
 

@@ -33,9 +33,9 @@ of a client here and they do not deserve the same answer:
   is a different act, and this module does not attempt it and must not grow
   code that does. Everything below reads the search JSON only.
 
-``AVAILABLE`` stays ``False`` — it is the answer under default policy, and the
-``SOURCES`` map and ``doctor`` both key on it, so nothing turns Klook on by
-accident. ``available(ignore_robots=True)`` is the only way in.
+``AVAILABLE`` stays ``False`` — it is the answer under default policy, and
+``doctor`` asserts it, so nothing turns Klook on by accident.
+``available(ignore_robots=True)`` is the only way in.
 
 Klook runs an affiliate/partner programme; that remains the route that needs no
 override at all, and the parsing code here is what such an integration starts

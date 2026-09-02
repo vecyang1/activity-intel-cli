@@ -14,11 +14,13 @@ Note the deliberate asymmetry, because getting it backwards is expensive:
   * Pacing/tuning vars are **behaviour** -> they are scrubbed, so a developer's
     shell cannot make a test pass that would fail on a clean machine.
 
-There are no credentials to scrub: every source in this package is public and
-unauthenticated. If that ever changes, the new variable belongs in the scrub
-list below **in the same commit that introduces it** — the window between
-adding a credential path and isolating it is exactly when a suite runs against
-live data, and it leaves no failing test behind to say so.
+One credential is scrubbed: ``VIATOR_API_KEY``. The code read it and this list
+did not name it, so a developer with the key exported ran a different suite
+from one without — `viator.available()` flipped, and with it which sources a
+command believed it could ask. A new credential variable belongs in ``SCRUBBED``
+**in the same commit that introduces it** — the window between adding a
+credential path and isolating it is exactly when a suite runs against live
+data, and it leaves no failing test behind to say so.
 """
 from __future__ import annotations
 
@@ -42,7 +44,10 @@ REAL_DB_MTIME_BEFORE = REAL_DB.stat().st_mtime if REAL_DB.exists() else None
 SANDBOX = Path(tempfile.mkdtemp(prefix="activityintel-tests-"))
 os.environ["ACTIVITY_INTEL_HOME"] = str(SANDBOX)
 
-for _var in ("ACTIVITY_INTEL_REQUEST_GAP_S",):
+# Behaviour and credential variables: scrubbed, never sandboxed. Asserted on
+# by the suite so a variable the code starts reading cannot drift off this list.
+SCRUBBED = ("ACTIVITY_INTEL_REQUEST_GAP_S", "VIATOR_API_KEY")
+for _var in SCRUBBED:
     os.environ.pop(_var, None)
 
 # Make the package importable regardless of how the suite was invoked.

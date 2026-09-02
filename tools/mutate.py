@@ -228,17 +228,17 @@ MUTANTS = [
 
     # --- CSV flattening (2026-08-28) -----------------------------------------
     ("CSV writes a 0 rating for a listing that has never been rated",
-     "activityintel/cli.py",
+     "activityintel/render.py",
      r'(?m)^            out\[col\] = "" if v is None else _csv_safe\(v, neutered\)$',
      '            out[col] = 0 if v is None else _csv_safe(v, neutered)'),
 
     ("CSV prints the coverage warning into the data instead of stderr",
-     "activityintel/cli.py",
+     "activityintel/render.py",
      r'(?m)^        print\(f"\[coverage\] \{note or \'this sweep is not complete\'\}", file=sys\.stderr\)$',
      '        print(f"[coverage] {note or \'this sweep is not complete\'}")'),
 
     ("CSV columns are taken from whatever the first row happens to have",
-     "activityintel/cli.py",
+     "activityintel/render.py",
      r"(?m)^                            extrasaction=\"ignore\", lineterminator=\"\\n\"\)$",
      '                            extrasaction="ignore", lineterminator="\\n",\n'
      '                            restval="0")'),
@@ -260,7 +260,7 @@ MUTANTS = [
      '            "members_by_source": {},'),
 
     ("the CSV's n_sources column counts listings instead of platforms",
-     "activityintel/cli.py",
+     "activityintel/render.py",
      r'(?m)^               "n_sources": len\(g\.get\("members_by_source"\) or \{\}\),$',
      '               "n_sources": g.get("members_count"),'),
 
@@ -276,7 +276,7 @@ MUTANTS = [
      '        entry["matched_out"] = 0'),
 
     ("a spreadsheet formula in a listing title survives into the CSV",
-     "activityintel/cli.py",
+     "activityintel/render.py",
      r'(?m)^    if isinstance\(value, str\) and value\[:1\] in _CSV_TRIGGERS:$',
      '    if False:'),
 
@@ -309,6 +309,82 @@ MUTANTS = [
      "tests/test_docs_parity.py",
      r'(?m)^                if \(exc\.code or 0\) != 0:$',
      '                if True:'),
+
+    # -- 2026-09-02 debug pass: incidents, flags, the unwired source --------
+    ("a rate limit is recorded against one keyword instead of stopping the sweep",
+     "activityintel/sweep.py",
+     r"(?m)^        except transport\.INCIDENTS:$",
+     "        except ():"),
+
+    ("the Airbnb sweep keeps paging a host that answered 429",
+     "activityintel/sources/airbnb.py",
+     r"(?m)^        except transport\.INCIDENTS:$",
+     "        except ():"),
+
+    ("a source that was enabled and never asked reports complete again",
+     "activityintel/cli.py",
+     r"(?m)^        if name not in coverage\[\"sources\"\]:$",
+     "        if False:"),
+
+    ("compare counts an unwired source as a platform to compare against",
+     "activityintel/cli.py",
+     r"(?m)^    askable = sorted\(n for n in live if n in SWEEPABLE\)$",
+     "    askable = sorted(live)"),
+
+    ("doctor calls a keyed Viator ready",
+     "activityintel/doctor.py",
+     r"(?m)^    return \(f\"key present in \$\{viator\.KEY_ENV\}, but this build has no sweep \"$",
+     "    return (f\"ready (key present in ${viator.KEY_ENV}) \""),
+
+    ("compare --limit is overwritten with 0 again",
+     "activityintel/cli.py",
+     r"(?m)^    limit = getattr\(args, \"limit\", 0\) or 0$",
+     "    limit = 0"),
+
+    ("the compare table goes quiet about a partial sweep",
+     "activityintel/render.py",
+     r"(?m)^        print\(\"\[coverage\] the catalogue under this comparison is a SAMPLE, \"$",
+     "        print(\"\""),
+
+    ("a negative --limit parses again and drops the last row",
+     "activityintel/cli.py",
+     r"(?m)^        sp\.add_argument\(\"--limit\", type=_int_at_least\(0\), default=0,$",
+     "        sp.add_argument(\"--limit\", type=int, default=0,"),
+
+    ("--max-pages stops reaching the Airbnb sweep",
+     "activityintel/cli.py",
+     r"(?m)^                                         max_pages=args\.max_pages\)$",
+     "                                         )"),
+
+    ("the Airbnb note stops naming the fault behind an incomplete pass",
+     "activityintel/cli.py",
+     r"(?m)^                        note \+= f\"\. First error: \{first_err\}\"$",
+     "                        pass"),
+
+    ("the sweep note stops naming the first error",
+     "activityintel/sweep.py",
+     r"(?m)^                f\"whatever they would have contributed\. First error: \{self\.first_error\}\"$",
+     "                f\"whatever they would have contributed.\""),
+
+    ("a missing Airbnb cursor key reads as the last page again",
+     "activityintel/sources/airbnb.py",
+     r"(?m)^    if not isinstance\(pagination, dict\) or \"nextPageCursor\" not in pagination:$",
+     "    if False:"),
+
+    ("an unopenable store escapes as a traceback again",
+     "activityintel/cli.py",
+     r"(?m)^    except store\.StoreUnavailable as exc:$",
+     "    except () as exc:"),
+
+    ("a request that never got a status stops counting as an error",
+     "activityintel/store.py",
+     r"(?m)^        \"SUM\(CASE WHEN status IS NULL OR status >= 400 THEN 1 ELSE 0 END\) AS errors \"$",
+     "        \"SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END) AS errors \""),
+
+    ("the sandbox stops scrubbing the one credential",
+     "tests/_sandbox.py",
+     r"(?m)^SCRUBBED = \(\"ACTIVITY_INTEL_REQUEST_GAP_S\", \"VIATOR_API_KEY\"\)$",
+     "SCRUBBED = (\"ACTIVITY_INTEL_REQUEST_GAP_S\",)"),
 ]
 
 

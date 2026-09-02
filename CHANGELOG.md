@@ -1,5 +1,78 @@
 # Changelog
 
+## v1.5.0 — 2026-09-02
+
+**A 429 was a page to skip, a keyed Viator was a complete catalogue, and nine
+flags were accepted by commands that never read them.** Found by running the
+shipped binary from `/` with inputs the suite had never sent it, plus an
+adversarial read of every module; each fix has a test that was seen red and a
+mutant that turns it red again.
+
+- **Incidents stop the sweep.** `transport.RateLimited` and the two robots
+  verdicts now re-raise out of `sweep.sweep` and `airbnb.sweep_place` as
+  `transport.INCIDENTS`, so a throttled run exits `5` and a policy refusal
+  exits `3`. Both loops caught `Exception` per query: measured with a fake
+  client, the first 429 was followed by 26 more requests to the throttling
+  host (each already three retries deep) and exit `7` — "the market is small"
+  for what was "we were told to stop". `cmd_catalog`'s `except RateLimited`
+  had been dead code since it was written. An ordinary `5xx` on one keyword
+  still loses only that keyword, and `coverage` now carries `failed_queries`
+  and `first_error` verbatim so a 429, a schema change and a DNS blip stop
+  reading as the same "N queries failed".
+- **A source a command cannot ask can no longer report complete.** With
+  `VIATOR_API_KEY` set, `catalog hanoi --sources viator` returned zero rows,
+  `complete: true`, exit `0`; `compare` counted it as a second platform and
+  compared Airbnb against nothing. `cli.SWEEPABLE` names the sources with a
+  sweep (`klook`, `airbnb`); `compare` counts only those; `doctor` reports
+  "key present, not wired" instead of "ready"; and `cmd_catalog` writes a
+  `not wired` coverage entry (exit `7`) for any wanted source that reaches the
+  end without one — keyed on the missing entry, not on a list of names.
+  `docs/SOURCES.md` now says what a key does and does not change.
+- **Flags are consumed or refused.** `--limit -1` became `rows[:-1]` and
+  dropped the last row; `--size 0` was falsy and became 50; `--max-pages 0`
+  walked nothing and reported "hit the ceiling"; `--threshold 2` found nothing
+  and blamed the titles; `search '' hanoi` was a full catalogue sweep;
+  `--language xx` failed every Airbnb pass with the reason visible only in
+  `passes[].error`; `--gap -1` turned pacing off. All refused at parse time
+  with the flag's name. `doctor` no longer accepts `--limit/--sort/--size/
+  --max-pages/--language/--csv`; `compare` no longer accepts `--sort` and now
+  **honours `--limit`** (it was overwritten with 0) — `match_count` is what
+  was found, `shown` what survived the cap. `--max-pages` now reaches the
+  Airbnb sweep, which paginated to its own constant. **`--lang` is removed**:
+  Klook's `k_lang` was measured to change nothing and Airbnb never received
+  it.
+- **The `compare` table warns about a partial sweep.** The other three
+  renderers did; this one exited `7` in silence.
+- **A coverage note names the fault.** `--cache-only` on a cold cache said
+  "passes that did not reach the end: (unfiltered), Cooking, …" and nothing
+  else; the cause (`CacheMiss: not cached and --cache-only was requested`)
+  lived only in JSON. Airbnb's note and the sweep note now carry the first
+  error verbatim.
+- **A missing Airbnb cursor key is a contract break, not the last page.**
+  `paginationInfo.nextPageCursor` had no shape check, so a renamed key read as
+  "exhausted" and a one-page sample would report complete. Every real page —
+  all 26 cached from a live sweep, including the 20 last pages — carries the
+  key, null on the last; its absence now raises `ContractError`.
+- **An unopenable store is exit `3`, not a traceback.** `store.connect`
+  translates `OSError`/`sqlite3.Error` into `StoreUnavailable` naming the path
+  and `ACTIVITY_INTEL_HOME`; `main` maps it to CONFIG. Translated at the store,
+  not at the top level, so a closed stdout pipe cannot be blamed on the
+  database.
+- **`cache` counts a request that never got a status as an error.**
+  `SUM(status >= 400)` read NULL as 0, so a host that never answered reported
+  a clean day.
+- **`tests/_sandbox.py` scrubs `VIATOR_API_KEY`** (`SCRUBBED`, asserted on).
+  The code read it and the sandbox did not pop it, so a developer with the key
+  exported ran a different suite from one without.
+- **Layout.** `cli.py` had reached 1,117 lines. Rendering moved to
+  `render.py`, the live checks to `doctor.py`, the source registry to
+  `sources/__init__.py` (`REGISTRY`, so the renderer needs no import of the
+  command layer). `cli.py` is 713 lines; nothing else changed shape.
+- Tests 232 → **273**; `tools/mutate.py` 50 → **65 mutants**, all caught under
+  Python 3.14.7 and 3.12.8. Live: 857 Hanoi rows (630 Klook + 227 Airbnb);
+  one Klook listing and one Airbnb listing checked against their real pages
+  for rating, review count and duration.
+
 ## v1.4.1 — 2026-08-28
 
 **The command printed its own usage, and the command it named did not exist.**

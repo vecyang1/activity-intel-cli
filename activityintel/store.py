@@ -52,14 +52,28 @@ CREATE INDEX IF NOT EXISTS requests_sent ON requests(sent_at);
 """
 
 
+class StoreUnavailable(RuntimeError):
+    """The cache database could not be opened. Names the path and the fix."""
+
+
 def connect(path: Path | None = None) -> sqlite3.Connection:
     target = path or config.db_path()
-    target.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(target), timeout=30)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.executescript(SCHEMA)
-    conn.commit()
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(str(target), timeout=30)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.executescript(SCHEMA)
+        conn.commit()
+    except (OSError, sqlite3.Error) as exc:
+        # Translated HERE, where the path is known, so the message can name
+        # it. A top-level `except OSError` in the CLI would also catch a
+        # closed pipe on stdout and blame the database for it.
+        raise StoreUnavailable(
+            f"cannot open the cache database at {target} "
+            f"({type(exc).__name__}: {exc}). Point ACTIVITY_INTEL_HOME at a "
+            f"writable directory, or fix the permissions on that path."
+        ) from exc
     return conn
 
 
@@ -134,7 +148,11 @@ def record_request(conn: sqlite3.Connection, host: str, url: str,
 
 def request_stats(conn: sqlite3.Connection, *, since: float) -> list[dict]:
     rows = conn.execute(
-        "SELECT host, COUNT(*) AS n, SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END) AS errors "
+        # A request that never got a status (timeout, reset, DNS) is recorded
+        # with NULL, and `NULL >= 400` is NULL, which SUM reads as 0 errors.
+        # A host that never answered would report a clean day.
+        "SELECT host, COUNT(*) AS n, "
+        "SUM(CASE WHEN status IS NULL OR status >= 400 THEN 1 ELSE 0 END) AS errors "
         "FROM requests WHERE sent_at >= ? GROUP BY host ORDER BY n DESC",
         (since,),
     ).fetchall()

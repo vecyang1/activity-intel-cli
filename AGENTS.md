@@ -65,6 +65,24 @@ touching anything that fetches.
    scope, so `dropped_out_of_scope` keeps meaning "a real activity, wrong city".
 5. **Never let a short answer look like a complete one.** Capped, truncated, or
    partially-failed sweeps set `coverage.complete = false` and exit `7`.
+5a. **An incident stops the sweep; a dead keyword does not.** `transport.INCIDENTS`
+   (`RateLimited`, `robots.Disallowed`, `robots.RobotsUnavailable`) are facts
+   about the host and re-raise out of both sweep loops to exit `5` / `3`. Until
+   2026-09-02 the per-query `except Exception` in `sweep.sweep` and
+   `airbnb.sweep_place` swallowed them: measured with a fake client, a 429 was
+   followed by 26 more requests to the same host and exit `7`. Only an
+   ordinary `UpstreamError` / parser failure is recorded against its own query
+   and stepped over — and `coverage` then names `failed_queries` and
+   `first_error` verbatim, because "N queries failed" made a 429, a schema
+   change and a DNS blip identical.
+5b. **A source in the registry is not a source a command can ask.** Viator is
+   "available" the moment a key is set and no command has a sweep for it; that
+   collapsed into `activities: [], complete: true, exit 0`. `cli.SWEEPABLE`
+   names what can be asked, `compare` counts only those, `doctor` says "key
+   present, not wired", and `cmd_catalog` writes a `not wired` coverage entry
+   for any wanted source that reaches the end without one — keyed on the
+   *absence of an entry*, so the next source registered and forgotten is
+   caught by the same line.
 6. **Absent is not zero.** `rating: null` + `rating_state` — never a `0.0`
    rating, never a `0.0` price for an unknown price. Same rule for derived
    fields: `price_usd` is `null` for a currency we have no honest rate for, and
@@ -93,6 +111,17 @@ touching anything that fetches.
    including the one the program prints about itself.** Docs lead with
    `bin/activity-intel`, not a `cd` plus `python3 -m`, and so does every usage
    and error line argparse emits. Never hardcode `prog`. See below.
+8a. **A flag the parser accepts must be consumed, and a value it cannot use is
+   refused at parse time.** `build_parser` has four option blocks — output,
+   list, sweep, network — and each subcommand takes only the blocks it reads.
+   One shared block gave `doctor` a `--limit` it ignored and `compare` a
+   `--sort` it overwrote. Validators (`_int_at_least`, `_unit_interval`,
+   `_language`, …) refuse with the flag's own name: `--limit -1` used to become
+   `rows[:-1]`, `--size 0` became the default, `--language xx` failed every
+   Airbnb pass with the cause visible only in JSON. `--lang` was removed
+   outright: Klook's `k_lang` is measured to change nothing and it never
+   reached Airbnb. Do not add a flag to the shared blocks without tracing it to
+   the code that reads it in every command that gets the block.
 
 ## Adding a source
 
@@ -151,9 +180,9 @@ Install: `ln -sf "$PWD/bin/activity-intel" ~/.local/bin/activity-intel`
 # Run under BOTH interpreters — the compliance verdict used to differ between
 # them, and only one of them is the one a human's shell actually picks.
 for py in /opt/homebrew/bin/python3 /usr/local/bin/python3; do
-  PYTHONDONTWRITEBYTECODE=1 $py -B -m unittest discover -s tests -t tests
+  PYTHONDONTWRITEBYTECODE=1 $py -B -m unittest discover -s tests -t tests   # 273
 done
-python3 tools/mutate.py                    # every guard confirmed able to go red
+python3 tools/mutate.py                    # 65 guards confirmed able to go red
 zsh -lc 'cd / && activity-intel doctor'                  # from where a user stands
 zsh -lc 'cd / && activity-intel doctor --ignore-robots'  # exercises Klook too
 ```
@@ -168,6 +197,15 @@ default. `TestFilesRunWhicheverWayTheyAreInvoked` grades every test file.
 points `ACTIVITY_INTEL_HOME` at a disposable directory and asserts afterwards
 that the real database was untouched. A location variable is *set*, never
 unset: unset means "use the default", and the default is the user's real store.
+Credential and behaviour variables are the opposite: `_sandbox.SCRUBBED` pops
+them, and a test asserts `VIATOR_API_KEY` is on that list — it was read by the
+code and not scrubbed until 2026-09-02, so a developer with the key exported
+ran a different suite from one without it.
+
+Mutants restore from the harness's own snapshot of each target file. **Do not
+edit a target — source, `README.md`, `tests/_sandbox.py` — while
+`tools/mutate.py` is running**; the restore would overwrite the edit. It aborts
+on a red baseline, and names the targets `git` reports as modified.
 
 Do not trust a green suite that has never been seen red. When you change a
 guard, add it to `tools/mutate.py` and confirm the suite fails.

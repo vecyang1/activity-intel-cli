@@ -18,3 +18,7 @@ venv/
 out/
 *.catalog.json
 *.compare.json
+
+# Derived code map (`graphify update .`). Rebuilt in seconds; a committed copy
+# rots the moment a file moves.
+graphify-out/
