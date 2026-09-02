@@ -68,8 +68,17 @@ mutant that turns it red again.
   `render.py`, the live checks to `doctor.py`, the source registry to
   `sources/__init__.py` (`REGISTRY`, so the renderer needs no import of the
   command layer). `cli.py` is 713 lines; nothing else changed shape.
+- **Two TLS tests asserted the machine, not the code.** A fresh clone
+  installed into a clean venv from the python.org 3.12 (empty CA store, no
+  certifi — exactly the state the `[tls]` extra documents) failed
+  `test_the_shared_context_trusts_something` and the certifi-fallback test,
+  while both passed on every developer interpreter because certifi happened
+  to be installed there. The fallback test now injects a fake `certifi` and
+  grades the wiring; the other skips with the remedy only when neither a
+  bundle nor certifi exists. Suite green in all three environments.
 - Tests 232 → **273**; `tools/mutate.py` 50 → **65 mutants**, all caught under
-  Python 3.14.7 and 3.12.8. Live: 857 Hanoi rows (630 Klook + 227 Airbnb);
+  Python 3.14.7 and 3.12.8; a clean 3.12 venv without certifi runs 272 + 1
+  documented skip. Live: 857 Hanoi rows (630 Klook + 227 Airbnb);
   one Klook listing and one Airbnb listing checked against their real pages
   for rating, review count and duration.
 

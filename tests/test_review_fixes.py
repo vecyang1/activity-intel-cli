@@ -269,41 +269,70 @@ class TlsTrustStoreFallback(unittest.TestCase):
     terminal returned an honest, complete, entirely empty catalogue.
     """
 
-    def test_the_shared_context_trusts_something(self):
+    def test_the_shared_context_trusts_something_when_it_can(self):
+        """Graded 2026-09-02 in a clean venv from the python.org 3.12: the
+        store is empty AND certifi is absent, which is the exact state the
+        `[tls]` extra exists for. Failing there asserted a property of the
+        machine, not of the code; the code's documented answer in that state
+        is the remedy, which `test_the_remedy_names_a_command…` grades."""
         from activityintel import config
-        self.assertTrue(config.tls_is_usable(),
-                        "no CA certificates: " + config.tls_remedy())
+        if config.tls_is_usable():
+            return
+        try:
+            import certifi  # noqa: F401
+        except ImportError:
+            self.skipTest("empty CA store and no certifi: the state "
+                          "`pip install 'activity-intel[tls]'` fixes; the "
+                          "fallback wiring is graded hermetically below")
+        self.fail("certifi is importable yet the shared context trusts "
+                  "nothing: " + config.tls_remedy())
 
     def test_context_is_cached_not_rebuilt_per_request(self):
         from activityintel import config
         self.assertIs(config.ssl_context(), config.ssl_context())
 
     def test_certifi_is_used_when_the_default_store_is_empty(self):
-        """Simulates the broken interpreter without needing to run under it."""
+        """Simulates the broken interpreter AND a present certifi, without
+        needing either. A fake `certifi` is injected so the test grades the
+        wiring — "an empty default store makes config ask certifi for its
+        bundle" — rather than whether this machine happens to have certifi
+        installed (it did not, in a clean venv, and the test went red for a
+        reason that had nothing to do with the code)."""
         import ssl
+        import sys as _sys
+        import types
         from activityintel import config
         real_default = ssl.create_default_context
         calls = {"cafile": None}
+        fake_bundle = "/fake/certifi/cacert.pem"
 
         def empty_then_certifi(*a, cafile=None, **kw):
             calls["cafile"] = cafile
-            ctx = real_default(cafile=cafile, **kw) if cafile else real_default()
-            if cafile is None:
-                ctx.set_ciphers("DEFAULT")
-                # Pretend the default store is empty by shadowing the accessor.
-                ctx.get_ca_certs = lambda binary_form=False: []
+            ctx = real_default()
+            # Shadow the accessor: empty for the default store, populated once
+            # the fallback supplied a bundle. No real PEM is needed to grade
+            # which path config took.
+            ctx.get_ca_certs = (lambda binary_form=False: [{"fake": True}]
+                                if cafile else [])
             return ctx
 
-        saved = config._SSL_CONTEXT
+        fake_certifi = types.ModuleType("certifi")
+        fake_certifi.where = lambda: fake_bundle
+        saved_ctx, saved_mod = config._SSL_CONTEXT, _sys.modules.get("certifi")
         config._SSL_CONTEXT = None
         ssl.create_default_context = empty_then_certifi
+        _sys.modules["certifi"] = fake_certifi
         try:
             ctx = config.ssl_context()
         finally:
             ssl.create_default_context = real_default
-            config._SSL_CONTEXT = saved
-        self.assertIsNotNone(calls["cafile"],
-                             "an empty default store must fall back to certifi")
+            config._SSL_CONTEXT = saved_ctx
+            if saved_mod is None:
+                _sys.modules.pop("certifi", None)
+            else:
+                _sys.modules["certifi"] = saved_mod
+        self.assertEqual(calls["cafile"], fake_bundle,
+                         "an empty default store must fall back to certifi's bundle")
         self.assertTrue(ctx.get_ca_certs())
 
     def test_the_remedy_names_a_command_and_the_interpreter(self):
