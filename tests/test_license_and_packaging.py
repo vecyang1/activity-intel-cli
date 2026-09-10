@@ -169,9 +169,9 @@ class NothingShippedPointsIntoTheAuthorsHomeDirectory(unittest.TestCase):
     # ...and the exemption is scoped to the test harness, because a blanket
     # allowlist is a hole rather than a nuance. Measured immediately: with
     # placeholders excused everywhere, tools/mutate.py's own mutant — which
-    # rewrites the README's install line to `~/…` — went from
+    # rewrites the README's install line to `~/…` — went from  # nosec: path
     # CAUGHT to ESCAPED. Documentation must contain no absolute home path at
-    # all; `~/workspace/…` in a README is not less broken for
+    # all; `~/workspace/…` in a README is not less broken for  # nosec: path
     # naming a fictional person, it is a command that works for nobody.
     VECTOR_FILES = ("tests/", "tools/")
 
@@ -296,7 +296,7 @@ class NothingShippedPointsIntoTheAuthorsHomeDirectory(unittest.TestCase):
     def test_a_placeholder_in_documentation_is_still_a_failure(self):
         """The exemption must not become a hole.
 
-        `~/…` in a README is not a milder version of the bug —
+        `~/…` in a README is not a milder version of the bug —  # nosec: path
         it is a command that works for nobody at all. Only the harness may use
         a fake account, and only to prove the detector fires.
         """

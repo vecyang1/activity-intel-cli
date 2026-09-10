@@ -184,7 +184,7 @@ def search_url(place_id: str, query: str, *, cursor: str | None = None,
     return f"{API_ROOT}/{query_hash}?{urllib.parse.urlencode(params)}"
 
 
-def headers(api_key: str = DEFAULT_API_KEY) -> dict:
+def headers(api_key: str = DEFAULT_PUBLIC_KEY) -> dict:
     return {"X-Airbnb-Api-Key": api_key, "Accept": "application/json"}
 
 

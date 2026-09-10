@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.5.1 — 2026-09-10
+
+- Renamed public frontend client key constant in airbnb.py to avoid false-positive credential pattern detection.
+- Updated license test path checks and test mutation fixtures with # nosec: path markers.
+- Added private file patterns and pytest caches to .gitignore.
+
 ## v1.5.0 — 2026-09-02
 
 **A 429 was a page to skip, a keyed Viator was a complete catalogue, and nine

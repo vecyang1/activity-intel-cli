@@ -22,3 +22,27 @@ out/
 # Derived code map (`graphify update .`). Rebuilt in seconds; a committed copy
 # rots the moment a file moves.
 graphify-out/
+
+# Pytest cache & test artifacts
+.pytest_cache/
+__pycache__/
+*.pyc
+
+# Private files & local state
+VAULT.md
+decisions.md
+progress.md
+task_plan.md
+handoff.md
+CLAUDE.md
+GEMINI.md
+CODEX.md
+PROJECT_LINKS.md
+FILE_MAP_INDEX.md
+PRINCIPLES.md
+MEMORY.md
+graphify-out/
+.planning/
+.specify/
+.agent/
+.claude/

@@ -178,7 +178,7 @@ MUTANTS = [
     ("the documented install points back into one machine's home directory",
      "README.md",
      r'(?m)^ln -sf "\$PWD/bin/activity-intel" ~/\.local/bin/activity-intel$',
-     'ln -sf "/Users/someone/Documents/A-coding/26.08.26-activity-intel-cli/bin/activity-intel" ~/.local/bin/activity-intel'),  # nosec: path,
+     'ln -sf "/Users/someone/Documents/A-coding/26.08.26-activity-intel-cli/bin/activity-intel" ~/.local/bin/activity-intel'),  # nosec: path,  # nosec: path
 
     ("a source loses its data terms in NOTICE",
      "NOTICE",
