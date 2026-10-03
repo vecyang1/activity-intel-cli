@@ -3,6 +3,11 @@
 .*.baiduyun.uploading.cfg
 *.baiduyun.uploading.cfg
 
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+
 # Python
 __pycache__/
 *.py[cod]
