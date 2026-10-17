@@ -1,5 +1,10 @@
 # Changelog
 
+## [2026-10-04] - 2026-10-04
+
+### Fixes
+- Sanitize viator mock test key and add .env.example template (`0224b58`)
+
 ## v1.5.1 — 2026-09-10
 
 - Renamed public frontend client key constant in airbnb.py to avoid false-positive credential pattern detection.
