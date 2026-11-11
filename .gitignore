@@ -51,3 +51,9 @@ graphify-out/
 .specify/
 .agent/
 .claude/
+
+# Security, Private Workspaces & Agent Constitutions
+AGENTS.md
+operations/
+!.env.sample
+!.env.template

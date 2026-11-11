@@ -262,3 +262,12 @@ on which `python3` was first on PATH: `urllib.robotparser` ignores a mid-path
 `*` on 3.12 and honours it on 3.14, so the same rules permitted a disallowed
 path under the interpreter a human's shell actually picks. Matching now lives in
 `rfc9309.py` and is identical on both.
+
+## Agentic Usage and Distributed Contribution
+
+> Agent接入后可自行推理, 也可以完善和提交回改进。
+
+AI coding agents can autonomously reason over this repository and are welcomed to submit improvements back upstream.
+
+- **Autonomous Reasoning**: Agents can inspect CLI flags, JSON schemas, and test contracts to reason and execute workflows without manual intervention.
+- **Distributed Contribution**: When your agent fixes an edge case, adds an adapter, or improves a workflow in real-world usage, ask your agent to run the test suite and submit a Pull Request via `gh pr create`.
